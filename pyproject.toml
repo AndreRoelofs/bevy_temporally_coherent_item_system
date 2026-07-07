@@ -1,0 +1,65 @@
+[dependency-groups]
+dev = [
+  "commitizen>=4.16",
+  "fake-bpy-module-5.0>=20260128",
+  "prek>=0.4.4",
+  "pytest>=9.0",
+  "ruff>=0.15",
+  "ty>=0.0.46",
+]
+
+[tool.ruff.lint]
+select = [
+  "A",    # builtin shadowing
+  "ARG",  # unused arguments
+  "B",    # bugbear
+  "C4",   # comprehensions
+  "DTZ",  # naive datetimes
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "FURB", # modernization
+  "I",    # import sorting
+  "LOG",  # logging pitfalls
+  "N",    # pep8 naming
+  "PERF", # performance
+  "PIE",  # misc lints
+  "PL",   # pylint
+  "RET",  # return statements
+  "RUF",  # ruff-specific
+  "SIM",  # simplification
+  "UP",   # pyupgrade
+  "W",    # pycodestyle warnings
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Blender's add-on API requires the `XXX_OT_xxx` / `XXX_PT_xxx` class-name
+# pattern for Operators and Panels.
+"plugins/blender/**/__init__.py" = ["N801"]
+# Literal expected values in asserts are the point of a test.
+"**/tests/**" = ["PLR2004"]
+
+[tool.ty.environment]
+python-version = "3.13"
+# headless.py inserts the add-on folder on sys.path and imports the pipeline
+# flat (`import export_pipeline`); resolve imports the same way.
+extra-paths = ["plugins/blender/pg_part_exporter/src/pg_part_exporter"]
+
+# Blender's property idiom puts a runtime call in annotation position
+# (`repo_root: bpy.props.StringProperty(...)`) in add-on entry modules.
+[[tool.ty.overrides]]
+include = ["plugins/blender/**/__init__.py"]
+
+[tool.ty.overrides.rules]
+invalid-type-form = "ignore"
+
+[tool.pytest.ini_options]
+testpaths = ["plugins"]
+# Tests import `export_pipeline` exactly like the headless entry point does.
+pythonpath = ["plugins/blender/pg_part_exporter/src/pg_part_exporter"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "cargo"
+tag_format = "v$version"
+update_changelog_on_bump = true

@@ -1,0 +1,16 @@
+[files]
+extend-exclude = ["target/", "assets/"]
+
+[default]
+locale = "en-us"
+extend-ignore-re = [
+    # Blender requires `_OT_` / `_PT_` infixes in Operator / Panel class names.
+    "\\b[A-Za-z]+_(OT|PT)_[A-Za-z_]+\\b",
+    # The personality-node converter's typo-fix map must spell out the typo
+    # it corrects in the mod's source text.
+    "\"solveable\": \"solvable\"",
+]
+
+[default.extend-words]
+# "LOD" (level of detail), not a misspelling of "load" — e.g. AnimationLod.
+lod = "lod"

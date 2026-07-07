@@ -1,0 +1,45 @@
+# Git hooks, run via prek (https://github.com/j178/prek): `just setup` installs them.
+# Heavy checks (clippy, ty, pytest) stay in `just check` / CI.
+repos:
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v6.0.0
+      hooks:
+          - id: trailing-whitespace
+            # Never touch generated/exported assets — re-exports must stay byte-identical.
+            exclude: ^assets/
+          - id: end-of-file-fixer
+            exclude: ^assets/
+          - id: check-merge-conflict
+          - id: check-toml
+          - id: check-yaml
+
+    - repo: local
+      hooks:
+          # Python tools run through uv so the hook uses the locked versions.
+          - id: ruff-format
+            name: ruff format
+            entry: uv run ruff format
+            language: system
+            types_or: [python, pyi]
+          - id: ruff-check
+            name: ruff check
+            entry: uv run ruff check --fix
+            language: system
+            types_or: [python, pyi]
+          - id: cargo-fmt
+            name: cargo fmt
+            entry: cargo fmt --all --
+            language: system
+            types: [rust]
+            pass_filenames: false
+          - id: typos
+            name: typos
+            # --force-exclude keeps typos.toml's excludes effective for the
+            # explicit file lists hooks pass in.
+            entry: typos --config typos.toml --force-exclude
+            language: system
+          - id: commitizen
+            name: commitizen check
+            entry: uv run cz check --allow-abort --commit-msg-file
+            language: system
+            stages: [commit-msg]
