@@ -12,6 +12,11 @@ pub fn scene_for(key: &ItemKey) -> Option<Box<dyn Scene>> {
     Some(scene)
 }
 
+#[derive(Bundle)]
+pub struct GunEquippedBundle {
+    equipped: Equipped,
+}
+
 fn gun() -> impl Scene {
     bsn! {
         Equipped
