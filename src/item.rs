@@ -25,16 +25,8 @@ pub enum ItemState {
     StoredIn(Entity),
 }
 
-#[derive(SceneComponent, Default, Clone)]
+#[derive(Component, Default, Clone)]
 pub struct Item {
     pub key: ItemKey,
     pub label: ItemLabel,
-}
-
-impl Item {
-    fn scene() -> impl Scene {
-        bsn! {
-            Transform { translation: Vec3::ZERO }
-        }
-    }
 }

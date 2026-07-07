@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 /// For when the player lets go of the item
 /// and it runs away from the player.
-#[derive(Component)]
+#[derive(Component, Clone, Default)]
 pub struct IdleMovement {
     pub speed: f32,
 }
