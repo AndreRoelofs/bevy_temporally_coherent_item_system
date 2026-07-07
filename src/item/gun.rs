@@ -17,7 +17,7 @@ pub struct GunProps {
 impl Gun {
     fn scene(props: GunProps) -> impl Scene {
         let scene: Box<dyn Scene> = match props.state {
-            ItemState::OnGround => Box::new(Gun::ground_scene()),
+            ItemState::OnGround(pos) => Box::new(Gun::ground_scene(pos)),
             ItemState::EquippedBy(_entity) => Box::new(Gun::equipped_scene()),
             ItemState::StoredIn(_entity) => Box::new(Gun::stored_scene()),
         };
@@ -27,9 +27,9 @@ impl Gun {
         }
     }
 
-    fn ground_scene() -> impl Scene {
+    fn ground_scene(pos: Vec3) -> impl Scene {
         bsn! {
-            OnGround(Vec3::ZERO)
+            OnGround(pos)
             Transform::default()
             IdleMovement
         }

@@ -17,12 +17,16 @@ pub struct ItemKey(pub String);
 #[derive(Deserialize, Default, Clone)]
 pub struct ItemLabel(pub String);
 
-#[derive(Default)]
 pub enum ItemState {
-    #[default]
-    OnGround,
+    OnGround(Vec3),
     EquippedBy(Entity),
     StoredIn(Entity),
+}
+
+impl Default for ItemState {
+    fn default() -> Self {
+        Self::OnGround(Vec3::ZERO)
+    }
 }
 
 #[derive(Component, Default, Clone)]
