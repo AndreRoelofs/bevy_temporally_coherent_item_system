@@ -1,4 +1,4 @@
-# bevy_temporaly_coherent_item_system
+# bevy_temporally_coherent_item_system
 
 This is my take on a "pure-ecs" item system in Bevy. This notice will be replaced with an actual description once the project is ready.
 
