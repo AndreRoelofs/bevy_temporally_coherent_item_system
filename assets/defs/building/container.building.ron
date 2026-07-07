@@ -1,0 +1,4 @@
+BuildingDef(
+    key: "core::building::container",
+    label: "Container",
+)
