@@ -1,5 +1,3 @@
-use bevy::prelude::*;
-
 fn main() {
-    App::new().add_plugins(DefaultPlugins).run();
+    bevy_temporally_coherent_item_system::run();
 }

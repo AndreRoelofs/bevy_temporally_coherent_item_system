@@ -1,5 +1,5 @@
 [package]
-name = "bevy_temporaly_coherent_item_system"
+name = "bevy_temporally_coherent_item_system"
 version = "0.1.0"
 edition = "2024"
 authors = ["Andre Roelofs"]
