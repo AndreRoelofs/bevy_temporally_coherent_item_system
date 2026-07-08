@@ -17,4 +17,4 @@ pub struct OnGround(pub Vec3);
 
 // The basic gun component.
 #[derive(Component, Clone, Default)]
-pub struct Gun();
+pub struct Gun;
