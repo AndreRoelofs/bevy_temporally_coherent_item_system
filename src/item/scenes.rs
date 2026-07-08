@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use super::ItemProps;
-use crate::{EquippedBy, IdleMovement, ItemState, OnGround};
+use crate::{EquippedBy, Gun, IdleMovement, ItemState, OnGround};
 
 pub fn scene_for(props: &ItemProps) -> Option<Box<dyn Scene>> {
     let ItemProps { key, state } = props;
@@ -28,7 +28,7 @@ fn gun(state: &ItemState) -> impl Scene {
             let entity = *entity;
             Box::new(bsn! {
                 EquippedBy(entity)
-                Mesh3d(asset_value(Cuboid::new(0.1, 0.2, 1.)))
+                Mesh3d(asset_value(Sphere::new(0.1)))
                 MeshMaterial3d<StandardMaterial>
             })
         }
@@ -37,7 +37,8 @@ fn gun(state: &ItemState) -> impl Scene {
         }),
     };
     bsn! {
-        #Gun
+        #Item
         scene
+        Gun
     }
 }
