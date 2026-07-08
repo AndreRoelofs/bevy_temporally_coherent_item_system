@@ -1,49 +1,7 @@
 use bevy::prelude::*;
 
-use crate::IdleMovement;
-
-use super::{Equipped, Item, ItemState, OnGround};
+use super::Item;
 
 // The basic gun component.
-#[derive(SceneComponent, Clone, Default)]
-#[scene(GunProps)]
+#[derive(Component, Clone, Default)]
 pub struct Gun(pub Item);
-
-#[derive(Default)]
-pub struct GunProps {
-    state: ItemState,
-}
-
-impl Gun {
-    fn scene(props: GunProps) -> impl Scene {
-        let scene: Box<dyn Scene> = match props.state {
-            ItemState::OnGround(pos) => Box::new(Gun::ground_scene(pos)),
-            ItemState::EquippedBy(_entity) => Box::new(Gun::equipped_scene()),
-            ItemState::StoredIn(_entity) => Box::new(Gun::stored_scene()),
-        };
-        bsn! {
-            #Gun
-            scene
-        }
-    }
-
-    fn ground_scene(pos: Vec3) -> impl Scene {
-        bsn! {
-            OnGround(pos)
-            Transform::default()
-            IdleMovement
-        }
-    }
-
-    fn equipped_scene() -> impl Scene {
-        bsn! {
-            Equipped
-        }
-    }
-
-    fn stored_scene() -> impl Scene {
-        bsn! {
-            Transform::default()
-        }
-    }
-}

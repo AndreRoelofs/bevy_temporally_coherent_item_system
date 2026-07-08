@@ -17,6 +17,7 @@ pub struct ItemKey(pub String);
 #[derive(Deserialize, Default, Clone)]
 pub struct ItemLabel(pub String);
 
+#[derive(Deserialize, Clone)]
 pub enum ItemState {
     OnGround(Vec3),
     EquippedBy(Entity),
@@ -29,8 +30,22 @@ impl Default for ItemState {
     }
 }
 
-#[derive(Component, Default, Clone)]
+#[derive(Default, Clone)]
+pub struct ItemProps {
+    pub key: ItemKey,
+    pub state: ItemState,
+}
+
+#[derive(SceneComponent, Default, Clone)]
+#[scene(ItemProps)]
 pub struct Item {
     pub key: ItemKey,
     pub label: ItemLabel,
+}
+
+impl Item {
+    fn scene(props: ItemProps) -> impl Scene {
+        let ItemProps { key, state } = props;
+        scenes::scene_for(&key, &state)
+    }
 }
