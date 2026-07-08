@@ -9,7 +9,7 @@ pub struct IdleMovement {
 
 /// When the item is equipped by the player.
 #[derive(Component, Clone, Default)]
-pub struct Equipped;
+pub struct EquippedBy(pub Option<Entity>);
 
 /// When the item is on the ground.
 #[derive(Component, Clone, Default)]

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use super::ItemProps;
-use crate::{Equipped, IdleMovement, ItemState, OnGround};
+use crate::{EquippedBy, IdleMovement, ItemState, OnGround};
 
 pub fn scene_for(props: &ItemProps) -> Option<Box<dyn Scene>> {
     let ItemProps { key, state } = props;
@@ -12,24 +12,26 @@ pub fn scene_for(props: &ItemProps) -> Option<Box<dyn Scene>> {
     Some(scene)
 }
 
-#[derive(Bundle)]
-pub struct GunEquippedBundle {
-    equipped: Equipped,
-}
-
 fn gun(state: &ItemState) -> impl Scene {
     let scene: Box<dyn Scene> = match state {
         ItemState::OnGround(pos) => {
             let pos = *pos;
             Box::new(bsn! {
                 OnGround(pos)
-                Transform::default()
+                Transform::from_xyz(pos.x, pos.y, pos.z)
                 IdleMovement
+                Mesh3d(asset_value(Cuboid::new(0.1, 0.2, 1.)))
+                MeshMaterial3d<StandardMaterial>
             })
         }
-        ItemState::EquippedBy(_entity) => Box::new(bsn! {
-            Equipped
-        }),
+        ItemState::EquippedBy(entity) => {
+            let entity = *entity;
+            Box::new(bsn! {
+                EquippedBy(entity)
+                Mesh3d(asset_value(Cuboid::new(0.1, 0.2, 1.)))
+                MeshMaterial3d<StandardMaterial>
+            })
+        }
         ItemState::StoredIn(_entity) => Box::new(bsn! {
             Transform::default()
         }),

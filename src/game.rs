@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use crate::{
-    CursorLocked, EYE_HEIGHT, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player,
-    look_around, toggle_cursor, update_player,
+    CursorLocked, EYE_HEIGHT, ItemKey, ItemProps, ItemState, PLATFORM_HALF, PLATFORM_THICKNESS,
+    PLATFORM_TOP_Y, Player, look_around, scene_for, toggle_cursor, update_player,
 };
 
 pub struct GamePlugin;
@@ -11,7 +11,15 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(CursorLocked::default())
             .add_systems(Startup, setup)
-            .add_systems(Update, (toggle_cursor, look_around, update_player));
+            .add_systems(
+                Update,
+                (
+                    toggle_cursor,
+                    look_around,
+                    update_player,
+                    spawn_gun.run_if(run_once),
+                ),
+            );
     }
 }
 
@@ -59,4 +67,12 @@ fn setup(
                 Transform::from_xyz(0.3, -0.3, -0.5),
             ));
         });
+}
+
+fn spawn_gun(world: &mut World) {
+    let _ = world.spawn_scene(scene_for(&ItemProps {
+        key: ItemKey("core::item::gun".to_string()),
+        // Spawn on the ground in front of the player
+        state: ItemState::OnGround(Vec3::new(0.0, 0.0, -5.0)),
+    }));
 }

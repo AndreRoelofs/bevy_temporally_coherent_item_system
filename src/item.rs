@@ -9,6 +9,8 @@ pub use components::*;
 pub use loader::*;
 pub use scenes::*;
 
+use crate::{EYE_HEIGHT, PLATFORM_TOP_Y};
+
 #[derive(Deserialize, Default, Clone)]
 pub struct ItemKey(pub String);
 
@@ -24,7 +26,7 @@ pub enum ItemState {
 
 impl Default for ItemState {
     fn default() -> Self {
-        Self::OnGround(Vec3::ZERO)
+        Self::OnGround(Vec3::new(0.0, PLATFORM_TOP_Y + EYE_HEIGHT, 0.0))
     }
 }
 
