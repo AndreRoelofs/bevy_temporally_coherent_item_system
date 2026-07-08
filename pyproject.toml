@@ -40,9 +40,6 @@ select = [
 
 [tool.ty.environment]
 python-version = "3.13"
-# headless.py inserts the add-on folder on sys.path and imports the pipeline
-# flat (`import export_pipeline`); resolve imports the same way.
-extra-paths = ["plugins/blender/pg_part_exporter/src/pg_part_exporter"]
 
 # Blender's property idiom puts a runtime call in annotation position
 # (`repo_root: bpy.props.StringProperty(...)`) in add-on entry modules.
@@ -54,8 +51,6 @@ invalid-type-form = "ignore"
 
 [tool.pytest.ini_options]
 testpaths = ["plugins"]
-# Tests import `export_pipeline` exactly like the headless entry point does.
-pythonpath = ["plugins/blender/pg_part_exporter/src/pg_part_exporter"]
 addopts = ["-ra", "--strict-config", "--strict-markers"]
 
 [tool.commitizen]
