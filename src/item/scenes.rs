@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use super::ItemProps;
-use crate::{EquippedBy, Gun, IdleMovement, ItemState, OnGround};
+use crate::{EquippedBy, Gun, IdleMovement, Item, ItemKey, ItemLabel, ItemState, OnGround};
 
 pub fn scene_for(props: &ItemProps) -> Option<Box<dyn Scene>> {
     let ItemProps { key, state } = props;
@@ -36,8 +36,10 @@ fn gun(state: &ItemState) -> impl Scene {
             Transform::default()
         }),
     };
+    let key = ItemKey("core::item::gun".to_string());
+    let label = ItemLabel("Gun".to_string());
     bsn! {
-        #Item
+        Item { key, label}
         scene
         Gun
     }
