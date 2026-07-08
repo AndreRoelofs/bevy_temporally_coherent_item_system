@@ -14,3 +14,7 @@ pub struct Equipped;
 /// When the item is on the ground.
 #[derive(Component, Clone, Default)]
 pub struct OnGround(pub Vec3);
+
+// The basic gun component.
+#[derive(Component, Clone, Default)]
+pub struct Gun();

@@ -2,12 +2,10 @@ use bevy::prelude::*;
 use serde::Deserialize;
 
 mod components;
-mod gun;
 mod loader;
 mod scenes;
 
 pub use components::*;
-pub use gun::*;
 pub use loader::*;
 pub use scenes::*;
 
@@ -45,7 +43,6 @@ pub struct Item {
 
 impl Item {
     fn scene(props: ItemProps) -> impl Scene {
-        let ItemProps { key, state } = props;
-        scenes::scene_for(&key, &state)
+        scenes::scene_for(&props)
     }
 }
