@@ -1,4 +1,0 @@
-ItemDef(
-    key: "core::item::gun",
-    label: "Gun",
-)

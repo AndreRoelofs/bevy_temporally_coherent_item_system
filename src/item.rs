@@ -2,11 +2,9 @@ use bevy::prelude::*;
 use serde::Deserialize;
 
 mod components;
-mod loader;
 mod scenes;
 
 pub use components::*;
-pub use loader::*;
 pub use scenes::*;
 
 #[derive(Deserialize, Default, Clone)]

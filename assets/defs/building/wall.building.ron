@@ -1,4 +1,0 @@
-BuildingDef(
-    key: "core::building::wall",
-    label: "Wall",
-)
