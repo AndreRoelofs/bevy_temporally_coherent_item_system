@@ -2,9 +2,10 @@ use bevy::ecs::component::Components;
 use bevy::prelude::*;
 
 use crate::{
-    CursorLocked, EYE_HEIGHT, GroundedSecs, Gun, Item, ItemKey, ItemRegistry, ItemState,
-    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, Rusty, View, ViewOf, look_around,
-    register_builtin_items, toggle_cursor, update_player, view_on_rust, view_on_state_change,
+    CursorLocked, EYE_HEIGHT, GroundedSecs, Gun, Item, ItemHolder, ItemKey, ItemRegistry,
+    ItemState, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, Rusty, View, ViewOf,
+    ground_items_of_lost_holder, look_around, register_builtin_items, toggle_cursor, update_player,
+    view_on_rust, view_on_state_change,
 };
 
 pub struct GamePlugin;
@@ -18,6 +19,7 @@ impl Plugin for GamePlugin {
             .insert_resource(registry)
             .add_observer(view_on_state_change)
             .add_observer(view_on_rust)
+            .add_observer(ground_items_of_lost_holder)
             .add_systems(Startup, (setup, spawn_gun))
             .add_systems(
                 Update,
@@ -78,6 +80,7 @@ fn setup(
             Camera3d::default(),
             Transform::from_xyz(0.0, PLATFORM_TOP_Y + EYE_HEIGHT, 0.0),
             Player::default(),
+            ItemHolder,
             AmbientLight {
                 brightness: 200.0,
                 ..default()

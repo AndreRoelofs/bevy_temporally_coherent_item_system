@@ -4,8 +4,8 @@
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy_temporally_coherent_item_system::{
-    GroundedSecs, Gun, Item, ItemKey, ItemRegistry, ItemState, Rusty, View, ViewOf,
-    register_builtin_items, view_on_rust, view_on_state_change,
+    GroundedSecs, Gun, Item, ItemHolder, ItemKey, ItemRegistry, ItemState, Rusty, View, ViewOf,
+    ground_items_of_lost_holder, register_builtin_items, view_on_rust, view_on_state_change,
 };
 
 fn test_app() -> App {
@@ -20,6 +20,7 @@ fn test_app() -> App {
     app.insert_resource(registry);
     app.add_observer(view_on_state_change);
     app.add_observer(view_on_rust);
+    app.add_observer(ground_items_of_lost_holder);
     app
 }
 
@@ -133,6 +134,47 @@ fn unknown_key_leaves_model_intact() {
     assert!(view_entity(&app, model).is_none());
     assert!(app.world().get::<Item>(model).is_some());
     assert!(app.world().get::<ItemState>(model).is_some());
+}
+
+#[test]
+fn holder_despawn_regrounds_equipped_items() {
+    let mut app = test_app();
+    let holder_pos = Vec3::new(3.0, 0.0, 4.0);
+    let holder = app
+        .world_mut()
+        .spawn((ItemHolder, Transform::from_translation(holder_pos)))
+        .id();
+    let model = spawn_gun(&mut app, ItemState::OnGround(Vec3::ZERO));
+    app.update();
+
+    app.world_mut().entity_mut(model).insert(Rusty);
+    app.world_mut()
+        .entity_mut(model)
+        .insert(ItemState::EquippedBy(holder));
+    app.update();
+    let hand_view = view_entity(&app, model).expect("equipped view exists");
+
+    // The holder dies. Without the guard this strands the item forever:
+    // the view despawns with the holder (ChildOf cascade) and the model is
+    // stuck pointing at a dead entity with no view.
+    app.world_mut().entity_mut(holder).despawn();
+    app.update();
+
+    assert!(
+        matches!(
+            app.world().get::<ItemState>(model),
+            Some(ItemState::OnGround(pos)) if *pos == holder_pos
+        ),
+        "the item lands where the holder died, got {:?}",
+        app.world().get::<ItemState>(model)
+    );
+    let ground_view = view_entity(&app, model).expect("a fresh ground view exists");
+    assert_ne!(ground_view, hand_view);
+    assert!(app.world().get_entity(hand_view).is_err());
+    assert!(
+        app.world().get::<Rusty>(model).is_some(),
+        "model components survive the holder's death too"
+    );
 }
 
 #[test]

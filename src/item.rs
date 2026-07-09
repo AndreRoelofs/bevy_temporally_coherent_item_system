@@ -46,3 +46,39 @@ pub struct GroundedSecs(pub f32);
 /// so no view rebuild can lose it.
 #[derive(Component, Clone, Default)]
 pub struct Rusty;
+
+/// Marker for anything an `ItemState` variant can point at — players,
+/// chests, corpses. Holders must carry it so `ground_items_of_lost_holder`
+/// can find stranded items when one dies.
+#[derive(Component, Clone, Default)]
+pub struct ItemHolder;
+
+/// The dangling-reference guard. Without it, despawning a holder strands
+/// every item it held: the equipped view dies with the holder (it is a
+/// `ChildOf`), the model keeps `EquippedBy(dead)`, and no observer ever
+/// re-fires — the item is invisible and unreachable forever.
+///
+/// `Despawn` fires before the holder's components are stripped, so its
+/// `Transform` is still readable for the landing position. The re-insert is
+/// an ordinary transition; the view rebuilds through the normal path.
+pub fn ground_items_of_lost_holder(
+    despawn: On<Despawn, ItemHolder>,
+    holders: Query<&Transform>,
+    items: Query<(Entity, &ItemState), With<Item>>,
+    mut commands: Commands,
+) {
+    let dead = despawn.event().entity;
+    let pos = holders
+        .get(dead)
+        .map(|t| t.translation)
+        .unwrap_or(Vec3::ZERO);
+    for (item_e, state) in &items {
+        let stranded = match state {
+            ItemState::EquippedBy(holder) | ItemState::StoredIn(holder) => *holder == dead,
+            ItemState::OnGround(_) => false,
+        };
+        if stranded {
+            commands.entity(item_e).insert(ItemState::OnGround(pos));
+        }
+    }
+}

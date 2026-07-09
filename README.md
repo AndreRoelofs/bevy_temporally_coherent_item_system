@@ -63,9 +63,20 @@ entity id each time.
   the official `.bsn` file loader lands, the `ItemRegistry` can map keys to
   scene assets instead of functions and item appearance becomes fully
   data-driven.
-- `EquippedBy`/`StoredIn` hold raw `Entity` ids inside an enum. At larger
-  scale these want to be proper relationship pairs so despawning a holder or
-  container cleans up automatically.
+- `ItemState` is deliberately a single enum: exactly one state exists at any
+  instant by construction, and a transition is one `insert`. The cost is that
+  `EquippedBy`/`StoredIn` hold raw `Entity` ids, so reverse queries ("what is
+  this player holding?") are O(items) scans, and a dead holder leaves a
+  dangling id — covered here by the `ItemHolder` despawn guard, which
+  re-grounds stranded items through the ordinary transition path. If reverse
+  queries become hot, the scaling shape is to decompose the axes: keep a slim
+  location enum (`OnGround(Vec3) | Equipped | Stored`) as the view trigger
+  and move the entity reference into a real relationship pair (`ContainedBy`
+  / `Contains`) for O(1) reverse queries and automatic cleanup — trading away
+  the enum's by-construction exclusivity for it. Splitting each state into
+  its own relationship component is *not* recommended: sibling-state cleanup
+  is deferred through commands, so observers can see two states at once
+  mid-transition.
 
 ## License
 
