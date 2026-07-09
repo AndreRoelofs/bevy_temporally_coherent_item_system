@@ -8,13 +8,10 @@ setup:
     uv sync
     uv run prek install --hook-type pre-commit --hook-type commit-msg
 
-# Run the game.
+# Run the game. The default `dev` feature already compiles in `bevy/debug`,
+# so the on-screen component list shows real type names.
 play:
     cargo run
-
-# Run the game with in-game debug overlays compiled in.
-debug:
-    cargo run --features debug
 
 # Run the game with per-frame cost diagnostics logged to stdout every second
 # (frame time / FPS, entity count, per-render-pass GPU timings). Same dev
