@@ -7,15 +7,17 @@ use super::{Item, ItemRegistry, ItemState, Rusty};
 #[relationship(relationship_target = View)]
 pub struct ViewOf(pub Entity);
 
-/// The model's link to its current view entity. `linked_spawn` despawns the
-/// view together with the model.
+/// The model's link to its current view entity. The bare `Entity` field
+/// makes the relationship one-to-one: linking a new view automatically
+/// unlinks the previous one. `linked_spawn` despawns the view together with
+/// the model.
 #[derive(Component)]
 #[relationship_target(relationship = ViewOf, linked_spawn)]
-pub struct View(Vec<Entity>);
+pub struct View(Entity);
 
 impl View {
     pub fn entity(&self) -> Option<Entity> {
-        self.0.first().copied()
+        (self.0 != Entity::PLACEHOLDER).then_some(self.0)
     }
 }
 
