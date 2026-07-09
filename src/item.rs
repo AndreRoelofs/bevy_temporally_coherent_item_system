@@ -1,46 +1,48 @@
 use bevy::prelude::*;
-use serde::Deserialize;
 
-mod components;
+mod registry;
 mod scenes;
+mod view;
 
-pub use components::*;
+pub use registry::*;
 pub use scenes::*;
+pub use view::*;
 
-#[derive(Deserialize, Default, Clone)]
+/// Stable identifier for an item kind, e.g. `"core::item::gun"`.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ItemKey(pub String);
 
-#[derive(Deserialize, Default, Clone)]
-pub struct ItemLabel(pub String);
+/// Durable identity of an item. Lives on the model entity, which is never
+/// rebuilt, so this — like every other model component — survives every
+/// state transition.
+#[derive(Component, Clone)]
+pub struct Item {
+    pub key: ItemKey,
+    pub label: String,
+}
 
-#[derive(Deserialize, Clone)]
+/// Source of truth for where an item is. Immutable on purpose: the only way
+/// to transition is to re-insert the component, which fires
+/// `On<Insert, ItemState>` exactly once per transition.
+#[derive(Component, Clone, Debug)]
+#[component(immutable)]
 pub enum ItemState {
     OnGround(Vec3),
     EquippedBy(Entity),
     StoredIn(Entity),
 }
 
-impl Default for ItemState {
-    fn default() -> Self {
-        Self::OnGround(Vec3::ZERO)
-    }
-}
+/// Marker for gun-specific systems.
+#[derive(Component, Clone, Default)]
+pub struct Gun;
 
-#[derive(Default, Clone)]
-pub struct ItemProps {
-    pub key: ItemKey,
-    pub state: ItemState,
-}
+/// Cumulative seconds this item has spent on the ground, across any number
+/// of pickups and drops.
+#[derive(Component, Clone, Default)]
+pub struct GroundedSecs(pub f32);
 
-#[derive(SceneComponent, Default, Clone)]
-#[scene(ItemProps)]
-pub struct Item {
-    pub key: ItemKey,
-    pub label: ItemLabel,
-}
-
-impl Item {
-    fn scene(props: ItemProps) -> impl Scene {
-        scenes::scene_for(&props)
-    }
-}
+/// Grows on items left on the ground too long. Persisting this across
+/// pickup is the point of the whole design: it lives on the model entity,
+/// so no view rebuild can lose it.
+#[derive(Component, Clone, Default)]
+pub struct Rusty;

@@ -1,55 +1,54 @@
+use bevy::ecs::component::Components;
 use bevy::prelude::*;
-use bevy::scene::SceneComponentInfo;
 
 use crate::{
-    CursorLocked, EYE_HEIGHT, Item, ItemKey, ItemProps, ItemState, PLATFORM_HALF,
-    PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, look_around, scene_for, toggle_cursor,
-    update_player,
+    CursorLocked, EYE_HEIGHT, GroundedSecs, Gun, Item, ItemKey, ItemRegistry, ItemState,
+    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, Rusty, View, ViewOf, look_around,
+    register_builtin_items, toggle_cursor, update_player, view_on_rust, view_on_state_change,
 };
 
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
+        let mut registry = ItemRegistry::default();
+        register_builtin_items(&mut registry);
+
         app.insert_resource(CursorLocked::default())
-            .insert_resource(GunEntity::default())
-            .add_systems(Startup, setup)
+            .insert_resource(registry)
+            .add_observer(view_on_state_change)
+            .add_observer(view_on_rust)
+            .add_systems(Startup, (setup, spawn_gun))
             .add_systems(
                 Update,
                 (
                     toggle_cursor,
                     look_around,
                     update_player,
-                    regenerate_item_scene,
-                    pickup_gun,
-                    spawn_gun.run_if(run_once),
-                    update_gun_id_text,
-                    update_gun_components_text,
+                    pickup_item,
+                    drop_item,
+                    rust_grounded_items,
+                    update_hud,
                 ),
             );
     }
 }
 
 const PICKUP_RANGE: f32 = 1.5;
-const HAND_OFFSET: Vec3 = Vec3::new(-0.3, -0.3, -0.6);
-
-#[derive(Resource, Default)]
-pub struct GunEntity(pub Option<Entity>);
-
-#[derive(Component, Clone)]
-pub struct CurrentItemState(pub ItemState);
-
-impl Default for CurrentItemState {
-    fn default() -> Self {
-        Self(ItemState::default())
-    }
-}
+const DROP_DISTANCE: f32 = 2.0;
+/// Cumulative seconds on the ground before an item rusts.
+const RUST_AFTER_SECS: f32 = 5.0;
 
 #[derive(Component)]
-struct GunIdText;
+struct ModelHudText;
 
 #[derive(Component)]
-struct GunComponentsText;
+struct ViewHudText;
+
+/// The `Without`s prove to the scheduler that the text nodes are disjoint
+/// from the `EntityRef` queries over models and views.
+type HudTextQuery<'w, 's, T, O> =
+    Query<'w, 's, &'static mut Text, (With<T>, Without<O>, Without<Item>, Without<ViewOf>)>;
 
 fn setup(
     mut commands: Commands,
@@ -103,13 +102,13 @@ fn setup(
             left: Val::Px(10.0),
             ..default()
         },
-        Text::new("gun: <none>"),
+        Text::new("model:"),
         TextFont {
-            font_size: FontSize::Px(24.0),
+            font_size: FontSize::Px(18.0),
             ..default()
         },
         TextColor(Color::WHITE),
-        GunIdText,
+        ModelHudText,
     ));
 
     commands.spawn((
@@ -119,134 +118,150 @@ fn setup(
             left: Val::Px(10.0),
             ..default()
         },
-        Text::new("components:"),
+        Text::new("view:"),
         TextFont {
             font_size: FontSize::Px(18.0),
             ..default()
         },
         TextColor(Color::WHITE),
-        GunComponentsText,
+        ViewHudText,
     ));
 }
 
-fn spawn_gun(world: &mut World) {
-    let initial_state = ItemState::OnGround(Vec3::new(0.0, 0.0, -5.0));
-    let entity = world
-        .spawn_scene(scene_for(&ItemProps {
+fn spawn_gun(mut commands: Commands) {
+    // Spawning the model is all it takes: the `On<Insert, ItemState>`
+    // observer builds the view.
+    commands.spawn((
+        Item {
             key: ItemKey("core::item::gun".to_string()),
-            state: initial_state.clone(),
-        }))
-        .expect("spawn gun")
-        .id();
-    world
-        .entity_mut(entity)
-        .insert(CurrentItemState(initial_state));
-    world.resource_mut::<GunEntity>().0 = Some(entity);
+            label: "Gun".to_string(),
+        },
+        Gun,
+        GroundedSecs::default(),
+        ItemState::OnGround(Vec3::new(0.0, 0.0, -5.0)),
+    ));
 }
 
-fn regenerate_item_scene(world: &mut World) {
-    let dirty: Vec<Entity> = world
-        .query_filtered::<Entity, Changed<CurrentItemState>>()
-        .iter(world)
-        .collect();
-
-    for entity in dirty {
-        let Some((key, state)) = world.entity(entity).get::<Item>().and_then(|item| {
-            world
-                .entity(entity)
-                .get::<CurrentItemState>()
-                .map(|state| (item.key.clone(), state.0.clone()))
-        }) else {
-            continue;
-        };
-
-        let mut item = world.entity_mut(entity);
-
-        item.retain::<(Item, SceneComponentInfo, CurrentItemState)>();
-
-        if let Some(scene) = scene_for(&ItemProps {
-            key,
-            state: state.clone(),
-        }) {
-            let _ = item.apply_scene(scene);
-        }
-
-        match state {
-            ItemState::EquippedBy(player) => {
-                item.insert(Transform::from_translation(HAND_OFFSET));
-                world.entity_mut(player).add_child(entity);
-            }
-            ItemState::OnGround(_) => {
-                item.remove::<ChildOf>();
-            }
-            ItemState::StoredIn(_) => {}
-        }
-    }
-}
-
-fn pickup_gun(
-    player: Query<(Entity, &Transform), (With<Player>, With<Camera3d>)>,
-    mut guns: Query<&mut CurrentItemState>,
+/// Walking over a grounded item picks it up. The transition is a single
+/// component re-insert on the model; the observer does the rest.
+fn pickup_item(
+    player: Query<(Entity, &Transform), With<Player>>,
+    items: Query<(Entity, &ItemState), With<Item>>,
+    mut commands: Commands,
 ) {
     let Ok((player_e, player_t)) = player.single() else {
         return;
     };
 
-    for mut state in &mut guns {
-        let ItemState::OnGround(pos) = &state.0 else {
+    for (item_e, state) in &items {
+        let ItemState::OnGround(pos) = state else {
             continue;
         };
-        let dx = player_t.translation.x - pos.x;
-        let dz = player_t.translation.z - pos.z;
-        let dist = (dx * dx + dz * dz).sqrt();
+        let dist = (player_t.translation - *pos).with_y(0.0).length();
         if dist < PICKUP_RANGE {
-            state.0 = ItemState::EquippedBy(player_e);
+            commands
+                .entity(item_e)
+                .insert(ItemState::EquippedBy(player_e));
         }
     }
 }
 
-fn update_gun_id_text(gun: Res<GunEntity>, mut text: Query<&mut Text, With<GunIdText>>) {
-    let Ok(mut text) = text.single_mut() else {
+/// G drops the equipped item in front of the player.
+fn drop_item(
+    keys: Res<ButtonInput<KeyCode>>,
+    player: Query<(Entity, &Transform), With<Player>>,
+    items: Query<(Entity, &ItemState), With<Item>>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::KeyG) {
+        return;
+    }
+    let Ok((player_e, player_t)) = player.single() else {
         return;
     };
-    match gun.0 {
-        Some(entity) => text.0 = format!("gun: {entity:?}"),
-        None => text.0 = "gun: <none>".to_string(),
+
+    for (item_e, state) in &items {
+        if !matches!(state, ItemState::EquippedBy(holder) if *holder == player_e) {
+            continue;
+        }
+        let forward = player_t.forward().with_y(0.0).normalize_or_zero();
+        let pos = (player_t.translation + forward * DROP_DISTANCE).with_y(PLATFORM_TOP_Y);
+        commands.entity(item_e).insert(ItemState::OnGround(pos));
+        return;
     }
 }
 
-fn update_gun_components_text(world: &mut World) {
-    let mut text_query = world.query_filtered::<Entity, With<GunComponentsText>>();
-    let Some(text_entity) = text_query.iter(world).next() else {
-        return;
+/// Ground exposure accumulates on the model and eventually rusts it. `Rusty`
+/// goes on the model entity, so it survives every later transition — this is
+/// the property the whole architecture exists to guarantee.
+type RustableItems<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static ItemState, &'static mut GroundedSecs),
+    (With<Item>, Without<Rusty>),
+>;
+
+fn rust_grounded_items(time: Res<Time>, mut items: RustableItems, mut commands: Commands) {
+    for (item_e, state, mut grounded) in &mut items {
+        if !matches!(state, ItemState::OnGround(_)) {
+            continue;
+        }
+        grounded.0 += time.delta_secs();
+        if grounded.0 >= RUST_AFTER_SECS {
+            commands.entity(item_e).insert(Rusty);
+        }
+    }
+}
+
+/// Shows the split live: the model line keeps the same entity id and grows
+/// components (Rusty), while the view line's entity id changes on every
+/// transition.
+fn update_hud(
+    models: Query<EntityRef, With<Item>>,
+    views: Query<EntityRef, With<ViewOf>>,
+    components: &Components,
+    mut model_text: HudTextQuery<ModelHudText, ViewHudText>,
+    mut view_text: HudTextQuery<ViewHudText, ModelHudText>,
+) {
+    let component_names = |entity: EntityRef| -> String {
+        entity
+            .archetype()
+            .components()
+            .iter()
+            .map(|&id| {
+                components
+                    .get_name(id)
+                    .map(|name| name.to_string())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     };
 
-    let gun = world.resource::<GunEntity>();
-    let Some(entity) = gun.0 else {
-        world.entity_mut(text_entity).get_mut::<Text>().unwrap().0 =
-            "components: <none>".to_string();
-        return;
+    let model_line = match models.iter().next() {
+        Some(model) => format!("model: {} [{}]", model.id(), component_names(model)),
+        None => "model: <none>".to_string(),
     };
-
-    let Ok(ent) = world.get_entity(entity) else {
-        world.entity_mut(text_entity).get_mut::<Text>().unwrap().0 =
-            "components: <despawned>".to_string();
-        return;
-    };
-
-    let components = world.components();
-    let names: Vec<String> = ent
-        .archetype()
-        .components()
+    let view_line = match models
         .iter()
-        .map(|&id| {
-            components
-                .get_name(id)
-                .map(|n| n.to_string())
-                .unwrap_or_default()
-        })
-        .collect();
+        .next()
+        .and_then(|model| model.get::<View>())
+        .and_then(View::entity)
+        .and_then(|view| views.get(view).ok())
+    {
+        Some(view) => format!("view: {} [{}]", view.id(), component_names(view)),
+        None => "view: <none>".to_string(),
+    };
 
-    world.entity_mut(text_entity).get_mut::<Text>().unwrap().0 =
-        format!("components: [{}]", names.join(", "));
+    // Only write on change so the UI doesn't relayout every frame.
+    if let Ok(mut text) = model_text.single_mut()
+        && text.0 != model_line
+    {
+        text.0 = model_line;
+    }
+    if let Ok(mut text) = view_text.single_mut()
+        && text.0 != view_line
+    {
+        text.0 = view_line;
+    }
 }
