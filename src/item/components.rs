@@ -10,6 +10,7 @@ pub struct ItemComponentsPlugin;
 
 impl Plugin for ItemComponentsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(RustyPlugin);
+        app.init_resource::<crate::StatModifierRegistry>()
+            .add_plugins((GunPlugin, RustyPlugin));
     }
 }

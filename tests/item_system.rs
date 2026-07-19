@@ -10,9 +10,9 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformPlugin;
 use bevy_temporally_coherent_item_system::{
-    Contains, GroundedSecs, Gun, Item, ItemKey, ItemRegistry, ItemState, ItemStateKind,
-    ItemTransitions, Rusty, View, ViewOf, ground_items_of_dying_holder, register_builtin_items,
-    repair_on_link_lost, view_on_rust, view_on_state_change,
+    Ammo, Contains, CursorLocked, EffectiveStats, FireOutcome, Firearm, GroundedSecs, Gun,
+    HandSocket, InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemStateKind,
+    ItemTransitions, LastShotAt, Player, Rusty, View, ViewOf, inspect_lines, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -25,14 +25,8 @@ fn test_app() -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<bevy::scene::ScenePatch>();
-
-    let mut registry = ItemRegistry::default();
-    register_builtin_items(&mut registry);
-    app.insert_resource(registry);
-    app.add_observer(view_on_state_change);
-    app.add_observer(view_on_rust);
-    app.add_observer(ground_items_of_dying_holder);
-    app.add_observer(repair_on_link_lost);
+    app.add_plugins(ItemPlugin);
+    app.init_resource::<ButtonInput<MouseButton>>();
 
     app.init_resource::<ViewSpawns>();
     app.add_observer(|_: On<Add, ViewOf>, mut spawns: ResMut<ViewSpawns>| spawns.0 += 1);
@@ -60,6 +54,11 @@ fn spawn_gun(app: &mut App, label: &str, pos: Vec3) -> Entity {
                     label: label.to_string(),
                 },
                 Gun,
+                Firearm {
+                    base_cooldown_secs: 0.5,
+                    magazine_size: 8,
+                },
+                Ammo(8),
                 GroundedSecs::default(),
                 Visibility::default(),
             ))
@@ -381,6 +380,213 @@ fn grounded_movement_does_not_rebuild_view() {
             .map(GlobalTransform::translation),
         Some(new_pos),
         "the view follows through transform propagation"
+    );
+}
+
+#[test]
+fn rust_recolors_the_view_in_place() {
+    let mut app = test_app();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+    let view = view_entity(&app, model).expect("view exists");
+    let base_material = app
+        .world()
+        .get::<MeshMaterial3d<StandardMaterial>>(view)
+        .expect("view has a material")
+        .0
+        .clone();
+    let spawns_before = view_spawns(&app);
+
+    app.world_mut().entity_mut(model).insert(Rusty);
+    app.update();
+
+    assert_eq!(
+        view_entity(&app, model),
+        Some(view),
+        "a cosmetic change adjusts the view in place, no respawn"
+    );
+    assert_eq!(view_spawns(&app), spawns_before);
+    let rusted = app
+        .world()
+        .get::<MeshMaterial3d<StandardMaterial>>(view)
+        .expect("view has a material")
+        .0
+        .clone();
+    assert_ne!(base_material, rusted, "the material was swapped");
+
+    // A rebuilt view (state transition) comes out rusty as well.
+    let holder = app.world_mut().spawn(Transform::default()).id();
+    with_commands(&mut app, |commands| {
+        commands.entity(model).equip_to(holder);
+    });
+    let hand_view = view_entity(&app, model).expect("hand view exists");
+    assert_eq!(
+        app.world()
+            .get::<MeshMaterial3d<StandardMaterial>>(hand_view)
+            .map(|material| material.0.clone()),
+        Some(rusted)
+    );
+}
+
+#[test]
+fn stat_fold_reacts_to_rust() {
+    let mut app = test_app();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+    assert_eq!(
+        app.world().get::<EffectiveStats>(model),
+        Some(&EffectiveStats { cooldown_secs: 0.5 }),
+        "base stats exist as soon as the Firearm fact does"
+    );
+
+    app.world_mut().entity_mut(model).insert(Rusty);
+    app.update();
+    assert_eq!(
+        app.world().get::<EffectiveStats>(model),
+        Some(&EffectiveStats { cooldown_secs: 1.0 }),
+        "rust doubles the cooldown through the fold, not by mutating Firearm"
+    );
+    assert_eq!(
+        app.world()
+            .get::<Firearm>(model)
+            .map(|firearm| firearm.base_cooldown_secs),
+        Some(0.5),
+        "the base fact is untouched"
+    );
+
+    app.world_mut().entity_mut(model).remove::<Rusty>();
+    app.update();
+    assert_eq!(
+        app.world().get::<EffectiveStats>(model),
+        Some(&EffectiveStats { cooldown_secs: 0.5 }),
+        "modifiers un-apply cleanly because they never wrote the base"
+    );
+}
+
+#[test]
+fn try_fire_rules() {
+    let stats = EffectiveStats { cooldown_secs: 0.5 };
+    assert_eq!(try_fire(10.0, &stats, &Ammo(0), None), FireOutcome::Empty);
+    assert_eq!(try_fire(10.0, &stats, &Ammo(3), None), FireOutcome::Fired);
+    assert_eq!(
+        try_fire(10.2, &stats, &Ammo(3), Some(&LastShotAt(10.0))),
+        FireOutcome::Cooldown
+    );
+    assert_eq!(
+        try_fire(10.6, &stats, &Ammo(3), Some(&LastShotAt(10.0))),
+        FireOutcome::Fired
+    );
+}
+
+#[test]
+fn fired_ammo_persists_across_transitions() {
+    let mut app = test_app();
+    app.insert_resource(CursorLocked(true));
+    let player = app
+        .world_mut()
+        .spawn((Player::default(), Transform::default()))
+        .id();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+    with_commands(&mut app, |commands| {
+        commands.entity(model).equip_to(player);
+    });
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    app.update();
+    assert_eq!(
+        app.world().get::<Ammo>(model).map(|ammo| ammo.0),
+        Some(7),
+        "one click, one shot"
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .clear_just_pressed(MouseButton::Left);
+
+    // The thesis: the spent round survives the full round trip.
+    with_commands(&mut app, |commands| {
+        commands.entity(model).drop_at(Vec3::X);
+    });
+    with_commands(&mut app, |commands| {
+        commands.entity(model).store_in(player);
+    });
+    with_commands(&mut app, |commands| {
+        commands.entity(model).equip_to(player);
+    });
+    assert_eq!(app.world().get::<Ammo>(model).map(|ammo| ammo.0), Some(7));
+}
+
+#[test]
+fn chrome_handles_are_reused_across_rebuilds() {
+    let mut app = test_app();
+    let holder = app.world_mut().spawn(Transform::default()).id();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+    let meshes_before = app.world().resource::<Assets<Mesh>>().len();
+
+    for _ in 0..3 {
+        with_commands(&mut app, |commands| {
+            commands.entity(model).equip_to(holder);
+        });
+        with_commands(&mut app, |commands| {
+            commands.entity(model).drop_at(Vec3::X);
+        });
+    }
+    assert_eq!(
+        app.world().resource::<Assets<Mesh>>().len(),
+        meshes_before,
+        "rebuilds clone definition handles instead of minting new assets"
+    );
+}
+
+#[test]
+fn equipped_view_parents_to_the_hand_socket() {
+    let mut app = test_app();
+    let holder = app
+        .world_mut()
+        .spawn((Player::default(), Transform::default()))
+        .id();
+    let socket = app
+        .world_mut()
+        .spawn((HandSocket, Transform::default(), ChildOf(holder)))
+        .id();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+
+    with_commands(&mut app, |commands| {
+        commands.entity(model).equip_to(holder);
+    });
+    let view = view_entity(&app, model).expect("equipped view exists");
+    assert_eq!(
+        app.world().get::<ChildOf>(view).map(ChildOf::parent),
+        Some(socket),
+        "views attach to the socket, not the holder root"
+    );
+}
+
+#[test]
+fn inspection_routes_agree_and_show_the_fold() {
+    let mut app = test_app();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+    app.world_mut().entity_mut(model).insert(Rusty);
+    app.update();
+
+    // Route 1: via the view (what the crosshair raycast resolves to).
+    let view = view_entity(&app, model).expect("view exists");
+    let via_view = app.world().get::<ViewOf>(view).expect("view links back").0;
+    // Route 2: as an inventory listing would, via the model directly.
+    assert_eq!(via_view, model, "both routes reach the same entity");
+
+    let world = app.world();
+    let lines = inspect_lines(world.entity(model), world.resource::<InspectContributors>());
+    assert!(
+        lines.iter().any(|line| line.contains("ammo 8/8")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("cooldown 1.00s")),
+        "the tooltip shows the folded (rusted) cooldown: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("rusty")),
+        "rust contributes its own line: {lines:?}"
     );
 }
 

@@ -1,14 +1,35 @@
 use bevy::prelude::*;
 
 mod components;
+mod inspect;
 mod registry;
-mod scenes;
-mod view;
+mod stats;
+mod views;
 
 pub use components::*;
+pub use inspect::*;
 pub use registry::*;
-pub use scenes::*;
-pub use view::*;
+pub use stats::*;
+pub use views::*;
+
+/// Wires the whole item system: the model-side component behaviors, the
+/// view side, and the lifecycle observers that keep the axes coherent.
+pub struct ItemPlugin;
+
+impl Plugin for ItemPlugin {
+    fn build(&self, app: &mut App) {
+        // Inspection resources exist before the hubs build, so contributor
+        // plugins can register lines at build time.
+        app.init_resource::<LookTarget>()
+            .init_resource::<InspectContributors>()
+            .add_plugins((ItemComponentsPlugin, ItemViewsPlugin))
+            .add_observer(ground_items_of_dying_holder)
+            .add_observer(repair_on_link_lost)
+            .add_systems(Update, inspect::look_at_target);
+        #[cfg(debug_assertions)]
+        app.add_systems(Last, check_item_invariants);
+    }
+}
 
 /// Stable identifier for an item kind, e.g. `"core::item::gun"`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -26,7 +47,7 @@ pub struct Item {
 /// The kind axis of an item's location, and nothing else: the holder or
 /// container lives in [`ContainedBy`], the position in the model's
 /// [`Transform`]. Exhaustively matchable via [`ItemState::kind`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ItemStateKind {
     OnGround,
     Equipped,
@@ -185,11 +206,56 @@ impl ItemTransitions for EntityCommands<'_> {
     }
 }
 
-/// In-module constructor for observers that must transition items without
-/// going through commands-on-self (e.g. re-grounding a dying holder's
-/// inventory). Not exported: outside this module the trait is the only door.
-pub(crate) fn on_ground_state() -> ItemState {
-    ItemState(ItemStateKind::OnGround)
+/// When an entity holding items despawns, everything it carried — equipped
+/// and stowed alike — drops at its death position. `Despawn` observers run
+/// before the dying entity's components are stripped, so its `Transform`
+/// and `Contains` list are still readable here. The link removal itself is
+/// handled afterwards by the relationship hook; by the time it fires, these
+/// items are already `OnGround`, so `repair_on_link_lost` stays silent.
+fn ground_items_of_dying_holder(
+    despawn: On<Despawn, Contains>,
+    holders: Query<(&Transform, &Contains)>,
+    items: Query<(), With<Item>>,
+    mut commands: Commands,
+) {
+    let Ok((transform, contains)) = holders.get(despawn.event().entity) else {
+        return;
+    };
+    for held in contains.iter() {
+        if items.get(held).is_err() {
+            continue;
+        }
+        if let Ok(mut item) = commands.get_entity(held) {
+            item.insert((
+                ItemState(ItemStateKind::OnGround),
+                Transform::from_translation(transform.translation),
+            ));
+        }
+    }
+}
+
+/// Safety net for links lost outside the sanctioned paths (e.g. a raw
+/// `remove::<ContainedBy>`). An item that is still `Equipped`/`Stored` with
+/// no link falls back to the ground at its own `Transform` — the last place
+/// it lay. `try_insert` is load-bearing: when the *model* is despawned
+/// while contained, this observer fires with the entity dead by flush time,
+/// and a plain insert would error.
+fn repair_on_link_lost(
+    removed: On<Remove, ContainedBy>,
+    states: Query<&ItemState, With<Item>>,
+    mut commands: Commands,
+) {
+    let model = removed.event().entity;
+    let held = states
+        .get(model)
+        .is_ok_and(|state| state.is_equipped() || state.is_stored());
+    if !held {
+        return;
+    }
+    warn!("item {model} lost its container without a transition; re-grounding it in place");
+    if let Ok(mut item) = commands.get_entity(model) {
+        item.try_insert(ItemState(ItemStateKind::OnGround));
+    }
 }
 
 /// The axes are coherent iff: `Equipped`/`Stored` have a link, `OnGround`
@@ -208,7 +274,7 @@ fn axis_violation(state: &ItemState, contained: Option<&ContainedBy>) -> Option<
 /// Dev-build watchdog for in-module mistakes; code outside this module
 /// cannot create contradictions because both axes are sealed.
 #[cfg(debug_assertions)]
-pub fn check_item_invariants(items: Query<(Entity, &ItemState, Option<&ContainedBy>), With<Item>>) {
+fn check_item_invariants(items: Query<(Entity, &ItemState, Option<&ContainedBy>), With<Item>>) {
     for (entity, state, contained) in &items {
         if let Some(violation) = axis_violation(state, contained) {
             error!("item axis invariant broken on {entity}: {violation} (state: {state:?})");

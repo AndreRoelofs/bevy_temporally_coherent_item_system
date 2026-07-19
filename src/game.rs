@@ -1,33 +1,24 @@
 use bevy::ecs::component::Components;
 use bevy::prelude::*;
 
-#[cfg(debug_assertions)]
-use crate::check_item_invariants;
 use crate::{
-    Contains, CursorLocked, EYE_HEIGHT, GroundedSecs, Gun, Item, ItemComponentsPlugin, ItemKey,
-    ItemRegistry, ItemState, ItemTransitions, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y,
-    Player, View, ViewOf, ground_items_of_dying_holder, look_around, register_builtin_items,
-    repair_on_link_lost, toggle_cursor, update_player, view_on_state_change,
+    Ammo, Contains, CursorLocked, CursorSystems, EYE_HEIGHT, Firearm, GroundedSecs, Gun,
+    HandSocket, InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemTransitions,
+    LookTarget, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, View, ViewOf,
+    inspect_lines, look_around, toggle_cursor, update_player,
 };
 
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        let mut registry = ItemRegistry::default();
-        register_builtin_items(&mut registry);
-
         app.insert_resource(CursorLocked::default())
-            .insert_resource(registry)
-            .add_plugins(ItemComponentsPlugin)
-            .add_observer(view_on_state_change)
-            .add_observer(ground_items_of_dying_holder)
-            .add_observer(repair_on_link_lost)
+            .add_plugins(ItemPlugin)
             .add_systems(Startup, (setup, spawn_guns))
             .add_systems(
                 Update,
                 (
-                    toggle_cursor,
+                    toggle_cursor.in_set(CursorSystems),
                     look_around,
                     update_player,
                     pickup_items,
@@ -36,8 +27,6 @@ impl Plugin for GamePlugin {
                     update_hud,
                 ),
             );
-        #[cfg(debug_assertions)]
-        app.add_systems(Last, check_item_invariants);
     }
 }
 
@@ -47,9 +36,10 @@ const DROP_DISTANCE: f32 = 2.0;
 /// Which line of the HUD a text node renders.
 #[derive(Component)]
 enum HudLine {
+    Target,
+    Carrying,
     Models,
     Views,
-    Carrying,
 }
 
 fn setup(
@@ -95,6 +85,13 @@ fn setup(
                 })),
                 Transform::from_xyz(0.3, -0.3, -0.5),
             ));
+            // The attachment point for equipped items; its transform alone
+            // decides where held items sit.
+            parent.spawn((
+                HandSocket,
+                Transform::from_xyz(-0.3, -0.3, -0.6),
+                Visibility::default(),
+            ));
         });
 
     // One flex column: blocks are multi-line and wrap, so they must push
@@ -110,7 +107,12 @@ fn setup(
             ..default()
         })
         .with_children(|parent| {
-            for line in [HudLine::Carrying, HudLine::Models, HudLine::Views] {
+            for line in [
+                HudLine::Target,
+                HudLine::Carrying,
+                HudLine::Models,
+                HudLine::Views,
+            ] {
                 parent.spawn((
                     Text::default(),
                     TextFont {
@@ -139,6 +141,11 @@ fn spawn_guns(mut commands: Commands) {
                     label: format!("Gun {}", n + 1),
                 },
                 Gun,
+                Firearm {
+                    base_cooldown_secs: 0.5,
+                    magazine_size: 8,
+                },
+                Ammo(8),
                 GroundedSecs::default(),
                 Visibility::default(),
             ))
@@ -225,6 +232,8 @@ fn update_hud(
     models: Query<EntityRef, With<Item>>,
     views: Query<EntityRef, With<ViewOf>>,
     player: Query<Option<&Contains>, With<Player>>,
+    target: Res<LookTarget>,
+    contributors: Res<InspectContributors>,
     components: &Components,
     mut texts: HudTexts,
 ) {
@@ -281,27 +290,34 @@ fn update_hud(
         .collect();
     view_lines.sort();
 
+    // The same renderer serves both inspection routes: the crosshair target
+    // (view raycast -> model) and the inventory (Contains -> model).
+    let target_line = match target.0.and_then(|model| models.get(model).ok()) {
+        Some(model) => format!(
+            "target: {}",
+            inspect_lines(model, &contributors).join(" · ")
+        ),
+        None => "target: <none>".to_string(),
+    };
+
     let carrying = match player.single() {
         Ok(Some(contains)) => {
             let mut held: Vec<String> = contains
                 .iter()
                 .map(|item| match models.get(item) {
-                    Ok(model) => format!(
-                        "{} ({:?})",
-                        label_of(model),
-                        model.get::<ItemState>().map(ItemState::kind)
-                    ),
+                    Ok(model) => inspect_lines(model, &contributors).join(" · "),
                     Err(_) => format!("{item}"),
                 })
                 .collect();
             held.sort();
-            format!("carrying: {}", held.join(", "))
+            format!("carrying:\n  {}", held.join("\n  "))
         }
         _ => "carrying: <nothing>".to_string(),
     };
 
     for (mut text, line) in &mut texts {
         let new = match line {
+            HudLine::Target => target_line.clone(),
             HudLine::Models => model_lines.join("\n"),
             HudLine::Views => view_lines.join("\n"),
             HudLine::Carrying => carrying.clone(),
