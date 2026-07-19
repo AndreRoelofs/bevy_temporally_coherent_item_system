@@ -588,6 +588,10 @@ fn chrome_handles_are_reused_across_rebuilds() {
     let holder = app.world_mut().spawn(Transform::default()).id();
     let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
     let meshes_before = app.world().resource::<Assets<Mesh>>().len();
+    let patches_before = app
+        .world()
+        .resource::<Assets<bevy::scene::ScenePatch>>()
+        .len();
 
     for _ in 0..3 {
         with_commands(&mut app, |commands| {
@@ -600,7 +604,14 @@ fn chrome_handles_are_reused_across_rebuilds() {
     assert_eq!(
         app.world().resource::<Assets<Mesh>>().len(),
         meshes_before,
-        "rebuilds clone definition handles instead of minting new assets"
+        "chrome scenes reference pre-made handles instead of minting new assets"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<Assets<bevy::scene::ScenePatch>>()
+            .len(),
+        patches_before,
+        "patches are built once at plugin build, never per spawn"
     );
 }
 

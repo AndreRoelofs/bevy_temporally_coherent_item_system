@@ -4,6 +4,7 @@
 //! its own module (`views/rusty.rs`) without the generic path knowing.
 
 use bevy::prelude::*;
+use bevy::scene::ScenePatch;
 
 use super::{ContainedBy, Item, ItemRegistry, ItemState, ItemStateKind};
 
@@ -100,11 +101,24 @@ pub(crate) fn refresh_view(
         return;
     };
 
-    let mut view = commands.spawn((
-        Mesh3d(chrome.mesh.clone()),
-        MeshMaterial3d(chrome.material.clone()),
-        ViewOf(model),
-    ));
+    let chrome = chrome.clone();
+    let spawned = commands.spawn_empty().id();
+    commands.queue(move |world: &mut World| {
+        world.resource_scope(|world, patches: Mut<Assets<ScenePatch>>| {
+            let Some(patch) = patches.get(&chrome) else {
+                error!("chrome scene patch missing for view {spawned}");
+                return;
+            };
+            let Ok(mut view) = world.get_entity_mut(spawned) else {
+                return;
+            };
+            if let Err(err) = patch.apply(&mut view) {
+                error!("failed to apply chrome to view {spawned}: {err}");
+            }
+        });
+    });
+    let mut view = commands.entity(spawned);
+    view.insert(ViewOf(model));
 
     match kind {
         ItemStateKind::OnGround => {

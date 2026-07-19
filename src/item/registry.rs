@@ -1,24 +1,19 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use bevy::scene::ScenePatch;
 
 use super::{Item, ItemStateKind};
 
-/// What an item looks like in one state: pure appearance data. Placement is
-/// structural (ground views hang off the model, equipped views off the
-/// holder's socket) and behavior lives in components, so neither is here.
-pub struct Chrome {
-    pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
-}
-
-/// Everything data-driven about an item kind. This is the content a future
-/// `.bsn` asset file provides; for now view plugins build it in code, once,
-/// so view rebuilds reuse the same handles instead of minting new assets.
+/// Everything data-driven about an item kind. Chrome is a `bsn!` scene per
+/// state, stored as a resolved [`ScenePatch`] asset so every view rebuild
+/// reapplies the same patch instead of minting new assets. Built once in
+/// code today; when the official `.bsn` file loader ships, each entry
+/// becomes `asset_server.load("items/gun.bsn")`.
 #[derive(Default)]
 pub struct ItemDefinition {
     /// Chrome per state. No entry means no view (e.g. `Stored`).
-    pub chrome: HashMap<ItemStateKind, Chrome>,
+    pub chrome: HashMap<ItemStateKind, Handle<ScenePatch>>,
 }
 
 /// Maps item keys to their definitions. Keys are strings so entries can
@@ -37,7 +32,7 @@ impl ItemRegistry {
     /// The chrome for a model in a given state, or `None` when the state
     /// has no visual presence or the key is unregistered (logged: an
     /// unregistered key is a wiring error, an absent state entry is not).
-    pub fn chrome(&self, model: EntityRef, kind: ItemStateKind) -> Option<&Chrome> {
+    pub fn chrome(&self, model: EntityRef, kind: ItemStateKind) -> Option<&Handle<ScenePatch>> {
         let item = model.get::<Item>()?;
         let Some(definition) = self.definitions.get(&item.key.0) else {
             warn!("no item definition registered for key `{}`", item.key.0);
@@ -45,4 +40,14 @@ impl ItemRegistry {
         };
         definition.chrome.get(&kind)
     }
+}
+
+pub fn build_chrome_patch(world: &mut World, scene: impl Scene) -> Handle<ScenePatch> {
+    let asset_server = world.resource::<AssetServer>().clone();
+    let mut patch = ScenePatch::load(&asset_server, scene);
+    let mut patches = world.resource_mut::<Assets<ScenePatch>>();
+    patch
+        .resolve(&asset_server, &patches)
+        .expect("chrome scenes have no asset-path dependencies");
+    patches.add(patch)
 }
