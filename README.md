@@ -1,5 +1,9 @@
 # bevy_temporally_coherent_item_system
 
+## 09 July 2026 State
+
+The game implements basic ideas described in the problem/solution statement. The game has Rusty component to define the color of the weapon and a way to add the Rusty component if the weapon was laying on the ground too long.
+
 ## Problem
 
 In many games, an item is a different *object* in each of its states: the gun
