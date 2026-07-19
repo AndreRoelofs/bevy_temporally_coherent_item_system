@@ -10,9 +10,10 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformPlugin;
 use bevy_temporally_coherent_item_system::{
-    Ammo, Contains, CursorLocked, EffectiveStats, FireOutcome, Firearm, GroundedSecs, Gun,
+    Ammo, Contains, Cooldown, CooldownModifiers, CursorLocked, FireOutcome, Firearm, GroundedSecs,
     HandSocket, InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemStateKind,
-    ItemTransitions, LastShotAt, Player, Rusty, View, ViewOf, inspect_lines, try_fire,
+    ItemTransitions, LastShotAt, Player, Rusty, StatModifierCommands, StatOp, View, ViewOf,
+    inspect_lines, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -53,7 +54,6 @@ fn spawn_gun(app: &mut App, label: &str, pos: Vec3) -> Entity {
                     key: ItemKey("core::item::gun".to_string()),
                     label: label.to_string(),
                 },
-                Gun,
                 Firearm {
                     base_cooldown_secs: 0.5,
                     magazine_size: 8,
@@ -78,6 +78,13 @@ fn kind(app: &App, model: Entity) -> Option<ItemStateKind> {
 
 fn view_spawns(app: &App) -> usize {
     app.world().resource::<ViewSpawns>().0
+}
+
+/// Read the folded cooldown the way any consumer does: the fold's one home
+/// on `Firearm`, over the modifier list read straight off the model.
+fn cooldown_of(app: &App, model: Entity) -> Option<f32> {
+    let firearm = app.world().get::<Firearm>(model)?;
+    Some(firearm.cooldown_secs(app.world().get::<CooldownModifiers>(model)))
 }
 
 #[test]
@@ -113,7 +120,6 @@ fn model_components_persist_and_views_swap() {
     assert_eq!(kind(&app, model), Some(ItemStateKind::Equipped));
     assert!(app.world().get::<Rusty>(model).is_some());
     assert!(app.world().get::<Engraved>(model).is_some());
-    assert!(app.world().get::<Gun>(model).is_some());
 
     let hand_view = view_entity(&app, model).expect("equipped item has a view");
     assert_ne!(ground_view, hand_view);
@@ -432,17 +438,21 @@ fn stat_fold_reacts_to_rust() {
     let mut app = test_app();
     let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
     assert_eq!(
-        app.world().get::<EffectiveStats>(model),
-        Some(&EffectiveStats { cooldown_secs: 0.5 }),
-        "base stats exist as soon as the Firearm fact does"
+        cooldown_of(&app, model),
+        Some(0.5),
+        "the fold over zero modifiers is the base"
     );
 
     app.world_mut().entity_mut(model).insert(Rusty);
     app.update();
     assert_eq!(
-        app.world().get::<EffectiveStats>(model),
-        Some(&EffectiveStats { cooldown_secs: 1.0 }),
+        cooldown_of(&app, model),
+        Some(1.0),
         "rust doubles the cooldown through the fold, not by mutating Firearm"
+    );
+    assert!(
+        app.world().get::<CooldownModifiers>(model).is_some(),
+        "rust registered its tagged entry on the model"
     );
     assert_eq!(
         app.world()
@@ -455,23 +465,80 @@ fn stat_fold_reacts_to_rust() {
     app.world_mut().entity_mut(model).remove::<Rusty>();
     app.update();
     assert_eq!(
-        app.world().get::<EffectiveStats>(model),
-        Some(&EffectiveStats { cooldown_secs: 0.5 }),
+        cooldown_of(&app, model),
+        Some(0.5),
         "modifiers un-apply cleanly because they never wrote the base"
+    );
+    assert!(
+        app.world().get::<CooldownModifiers>(model).is_none(),
+        "rust cleaned up its entry; the emptied list is removed with it"
+    );
+}
+
+#[test]
+fn stat_stages_fold_deterministically_from_any_source() {
+    // Sources defined by the TEST crate — extending the stat system needs
+    // no library changes.
+    #[derive(Component)]
+    struct HeavyBarrel;
+    #[derive(Component)]
+    struct Blessing;
+
+    let mut app = test_app();
+    let a = spawn_gun(&mut app, "A", Vec3::ZERO);
+    let b = spawn_gun(&mut app, "B", Vec3::X);
+    app.world_mut()
+        .entity_mut(a)
+        .insert((HeavyBarrel, Blessing));
+    app.world_mut()
+        .entity_mut(b)
+        .insert((HeavyBarrel, Blessing));
+
+    with_commands(&mut app, |commands| {
+        commands
+            .entity(a)
+            .set_stat_modifier::<HeavyBarrel, Cooldown>(StatOp::Flat(0.2))
+            .set_stat_modifier::<Blessing, Cooldown>(StatOp::Mult(2.0));
+        // The same two effects in the opposite order.
+        commands
+            .entity(b)
+            .set_stat_modifier::<Blessing, Cooldown>(StatOp::Mult(2.0))
+            .set_stat_modifier::<HeavyBarrel, Cooldown>(StatOp::Flat(0.2));
+    });
+
+    assert_eq!(
+        cooldown_of(&app, a),
+        Some(1.4),
+        "(0.5 + 0.2) x 2.0 — flat folds before multipliers"
+    );
+    assert_eq!(
+        cooldown_of(&app, a),
+        cooldown_of(&app, b),
+        "attach order is irrelevant"
+    );
+
+    with_commands(&mut app, |commands| {
+        commands
+            .entity(a)
+            .set_stat_modifier::<HeavyBarrel, Cooldown>(StatOp::Flat(0.3));
+    });
+    assert_eq!(
+        cooldown_of(&app, a),
+        Some(1.6),
+        "re-setting a source replaces its entry, never stacks"
     );
 }
 
 #[test]
 fn try_fire_rules() {
-    let stats = EffectiveStats { cooldown_secs: 0.5 };
-    assert_eq!(try_fire(10.0, &stats, &Ammo(0), None), FireOutcome::Empty);
-    assert_eq!(try_fire(10.0, &stats, &Ammo(3), None), FireOutcome::Fired);
+    assert_eq!(try_fire(10.0, 0.5, &Ammo(0), None), FireOutcome::Empty);
+    assert_eq!(try_fire(10.0, 0.5, &Ammo(3), None), FireOutcome::Fired);
     assert_eq!(
-        try_fire(10.2, &stats, &Ammo(3), Some(&LastShotAt(10.0))),
+        try_fire(10.2, 0.5, &Ammo(3), Some(&LastShotAt(10.0))),
         FireOutcome::Cooldown
     );
     assert_eq!(
-        try_fire(10.6, &stats, &Ammo(3), Some(&LastShotAt(10.0))),
+        try_fire(10.6, 0.5, &Ammo(3), Some(&LastShotAt(10.0))),
         FireOutcome::Fired
     );
 }

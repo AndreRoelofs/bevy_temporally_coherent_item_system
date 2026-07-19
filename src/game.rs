@@ -2,10 +2,10 @@ use bevy::ecs::component::Components;
 use bevy::prelude::*;
 
 use crate::{
-    Ammo, Contains, CursorLocked, CursorSystems, EYE_HEIGHT, Firearm, GroundedSecs, Gun,
-    HandSocket, InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemTransitions,
-    LookTarget, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, View, ViewOf,
-    inspect_lines, look_around, toggle_cursor, update_player,
+    Ammo, Contains, CursorLocked, CursorSystems, EYE_HEIGHT, Firearm, GroundedSecs, HandSocket,
+    InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemTransitions, LookTarget,
+    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, View, ViewOf, inspect_lines,
+    look_around, toggle_cursor, update_player,
 };
 
 pub struct GamePlugin;
@@ -140,7 +140,6 @@ fn spawn_guns(mut commands: Commands) {
                     key: ItemKey("core::item::gun".to_string()),
                     label: format!("Gun {}", n + 1),
                 },
-                Gun,
                 Firearm {
                     base_cooldown_secs: 0.5,
                     magazine_size: 8,

@@ -1,7 +1,7 @@
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
 
-use crate::{Ammo, EffectiveStats, Firearm, Item, ItemState, Player, ViewOf};
+use crate::{Ammo, CooldownModifiers, Firearm, Item, ItemState, Player, ViewOf};
 
 #[derive(Resource, Default)]
 pub struct LookTarget(pub Option<Entity>);
@@ -27,11 +27,12 @@ pub fn inspect_lines(model: EntityRef, contributors: &InspectContributors) -> Ve
     let state = model.get::<ItemState>().map(ItemState::kind);
     lines.push(format!("{label} — {state:?}"));
 
-    if let (Some(ammo), Some(firearm)) = (model.get::<Ammo>(), model.get::<Firearm>()) {
-        lines.push(format!("ammo {}/{}", ammo.0, firearm.magazine_size));
-    }
-    if let Some(stats) = model.get::<EffectiveStats>() {
-        lines.push(format!("cooldown {:.2}s", stats.cooldown_secs));
+    if let Some(firearm) = model.get::<Firearm>() {
+        if let Some(ammo) = model.get::<Ammo>() {
+            lines.push(format!("ammo {}/{}", ammo.0, firearm.magazine_size));
+        }
+        let cooldown_secs = firearm.cooldown_secs(model.get::<CooldownModifiers>());
+        lines.push(format!("cooldown {cooldown_secs:.2}s"));
     }
 
     lines.extend(contributors.lines.iter().filter_map(|line| line(model)));

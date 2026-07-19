@@ -9,10 +9,7 @@ items dies, everything they had falls to the ground where they stood.
 Internally, an item's whereabouts is no longer one big value but three
 simple parts - what state it is in, who has it, and where it is - and all
 changes go through one small set of functions, which keeps the parts from
-ever disagreeing. Guns can now be fired with the left mouse button, and a
-rusty gun shoots slower. Aiming at an item shows its details (ammo,
-cooldown, rust); items in the bag show the same details, because both read
-from the same place.
+ever disagreeing.
 
 ## 09 July 2026 State
 
@@ -59,34 +56,25 @@ new weapon automatically stows the old one, and an item first enters the
 world by being *dropped* into it. A dev-build watchdog reports any axis
 contradiction in-module code could still create.
 
-What changes with state is the **view**: a separate, disposable entity
-linked to its model with a one-to-one relationship (`ViewOf`/`View`,
-`linked_spawn`). The view derives from the model in layers:
+What changes with state is the **view**: a separate, disposable entity built
+from a `bsn!` scene and linked to its model with a one-to-one relationship
+(`ViewOf`/`View`, `linked_spawn`). The view is a pure function of the model:
 
-- **Chrome** (mesh, material) is data: an `ItemDefinition` in the
-  `ItemRegistry`, keyed by item key and state kind, with handles created
-  once so rebuilds reuse assets instead of minting new ones.
-- **Placement** is structure: a grounded view is a child of its model,
-  placed by the model's `Transform`; an equipped view is a child of the
-  holder's `HandSocket`; a stored item has no view at all.
-- **Decoration** is reactive: components adjust views from their own
-  modules without base chrome knowing — `Rusty` swaps the view's material
-  in place and contributes a tooltip line.
+```text
+view = f(model)
+```
+
+- A grounded view is a child of its model, placed by the model's `Transform`
+  through ordinary propagation; an equipped view is a child of the holder; a
+  stored item has no view at all.
+- Scene functions receive the model as an `EntityRef`, so a view can react
+  to *any* model component: the gun's material turns rust-brown when the
+  model has `Rusty`.
 - When an entity holding items despawns, everything it carried - equipped
   and stowed alike - drops at its death position: `Despawn` observers run
   before the dying entity's components are stripped, so its `Transform` and
   `Contains` list are still readable. A second observer repairs links lost
   outside the sanctioned paths by re-grounding the item where it last lay.
-
-Gameplay stats follow the same shape as views: facts on the model
-(`Firearm`, `Ammo`, `Rusty`) are never mutated by each other; derived
-values (`EffectiveStats`) are a **fold** over registered modifiers,
-recomputed reactively when a modifier component appears or disappears. Rust
-doubles the cooldown without touching `Firearm`, so modifiers compose and
-un-apply cleanly. The firing system and the inspection tooltip read only
-the fold — and both inspection routes (raycast at a view → `ViewOf` →
-model; inventory listing → `Contains` → model) render through one function
-on the same entity, so the ground tooltip and the bag can never disagree.
 
 Because the reference axis is one relationship and the *how* lives on the
 kind axis, a character can equip a sword and carry a gun in the bag at the
@@ -106,15 +94,13 @@ straight off `Contains`.
 - Walk over a grounded item to stow it in the bag
 - `Q` - equip the first stowed item (the current weapon slides into the bag)
 - `G` - drop the equipped item just beyond pickup range
-- Left click - fire the equipped gun (the capturing click never fires)
-- Aim at an item to see its stats in the HUD
 
 ## Points of improvement
 
-- `ItemDefinition`s are still built in code (`src/item/views/gun.rs`); once
-  the official `.bsn` file loader lands, they become asset files and item
-  appearance is fully data-driven — the definition struct is already
-  exactly the content such a file would hold.
+- The scenes in `src/item/scenes.rs` are still inlined `bsn!` blocks; once
+  the official `.bsn` file loader lands, the `ItemRegistry` can map keys to
+  scene assets instead of functions and item appearance becomes fully
+  data-driven.
 - The state ladder, for future scale: the sealed enum + relationship shape
   implemented here is the second rung. If per-state iteration ever gets hot
   (many items, per-frame systems that only touch grounded ones), the next

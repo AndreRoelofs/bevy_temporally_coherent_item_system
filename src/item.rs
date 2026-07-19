@@ -27,7 +27,13 @@ impl Plugin for ItemPlugin {
             .add_observer(repair_on_link_lost)
             .add_systems(Update, inspect::look_at_target);
         #[cfg(debug_assertions)]
-        app.add_systems(Last, check_item_invariants);
+        app.add_systems(
+            Last,
+            (
+                check_item_invariants,
+                stats::check_stat_source_leaks::<Cooldown>,
+            ),
+        );
     }
 }
 
