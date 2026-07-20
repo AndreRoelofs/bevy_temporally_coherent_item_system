@@ -55,7 +55,7 @@ fn spawn_gun(app: &mut App, label: &str, pos: Vec3) -> Entity {
                     label: label.to_string(),
                 },
                 Firearm {
-                    base_cooldown_secs: 0.5,
+                    cooldown: Cooldown(0.5),
                     magazine_size: 8,
                 },
                 Ammo(8),
@@ -84,7 +84,12 @@ fn view_spawns(app: &App) -> usize {
 /// on `Firearm`, over the modifier list read straight off the model.
 fn cooldown_of(app: &App, model: Entity) -> Option<f32> {
     let firearm = app.world().get::<Firearm>(model)?;
-    Some(firearm.cooldown_secs(app.world().get::<CooldownModifiers>(model)))
+    Some(
+        firearm
+            .cooldown
+            .effective(app.world().get::<CooldownModifiers>(model))
+            .0,
+    )
 }
 
 #[test]
@@ -457,8 +462,8 @@ fn stat_fold_reacts_to_rust() {
     assert_eq!(
         app.world()
             .get::<Firearm>(model)
-            .map(|firearm| firearm.base_cooldown_secs),
-        Some(0.5),
+            .map(|firearm| firearm.cooldown),
+        Some(Cooldown(0.5)),
         "the base fact is untouched"
     );
 
@@ -531,14 +536,20 @@ fn stat_stages_fold_deterministically_from_any_source() {
 
 #[test]
 fn try_fire_rules() {
-    assert_eq!(try_fire(10.0, 0.5, &Ammo(0), None), FireOutcome::Empty);
-    assert_eq!(try_fire(10.0, 0.5, &Ammo(3), None), FireOutcome::Fired);
     assert_eq!(
-        try_fire(10.2, 0.5, &Ammo(3), Some(&LastShotAt(10.0))),
+        try_fire(10.0, Cooldown(0.5), &Ammo(0), None),
+        FireOutcome::Empty
+    );
+    assert_eq!(
+        try_fire(10.0, Cooldown(0.5), &Ammo(3), None),
+        FireOutcome::Fired
+    );
+    assert_eq!(
+        try_fire(10.2, Cooldown(0.5), &Ammo(3), Some(&LastShotAt(10.0))),
         FireOutcome::Cooldown
     );
     assert_eq!(
-        try_fire(10.6, 0.5, &Ammo(3), Some(&LastShotAt(10.0))),
+        try_fire(10.6, Cooldown(0.5), &Ammo(3), Some(&LastShotAt(10.0))),
         FireOutcome::Fired
     );
 }

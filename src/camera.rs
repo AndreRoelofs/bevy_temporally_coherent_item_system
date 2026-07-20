@@ -25,9 +25,6 @@ pub struct Player {
 #[derive(Resource, Default)]
 pub struct CursorLocked(pub bool);
 
-/// Cursor capture/release handling. Systems that consume clicks for
-/// gameplay order themselves `.before(CursorSystems)` so the click that
-/// captures the mouse is never also a gameplay action.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CursorSystems;
 

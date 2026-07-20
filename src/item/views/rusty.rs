@@ -1,6 +1,4 @@
-//! Rust's view side: recolor the mesh of a rusty item's view in place, and
-//! contribute a tooltip line. Base views and the inspect panel never know
-//! about `Rusty`; these decorate whatever exists, for any item kind.
+//! Placeholder
 
 use bevy::prelude::*;
 

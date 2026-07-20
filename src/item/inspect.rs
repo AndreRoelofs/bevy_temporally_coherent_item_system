@@ -31,8 +31,8 @@ pub fn inspect_lines(model: EntityRef, contributors: &InspectContributors) -> Ve
         if let Some(ammo) = model.get::<Ammo>() {
             lines.push(format!("ammo {}/{}", ammo.0, firearm.magazine_size));
         }
-        let cooldown_secs = firearm.cooldown_secs(model.get::<CooldownModifiers>());
-        lines.push(format!("cooldown {cooldown_secs:.2}s"));
+        let cooldown = firearm.cooldown.effective(model.get::<CooldownModifiers>());
+        lines.push(format!("cooldown {:.2}s", cooldown.0));
     }
 
     lines.extend(contributors.lines.iter().filter_map(|line| line(model)));

@@ -1,24 +1,13 @@
-//! Modifiers as source-tagged entries in per-stat lists on the model
-//! itself: perfect read locality, item death cleans up for free (the list
-//! drops with the entity), and sources register and clean up their own
-//! entries through one typed door. There is no registry and no cache —
-//! values fold at read time, so they can never be stale.
-//!
-//! Determinism: entries fold in canonical stages, `(base + Σ flat) × Π
-//! mult`. Each stage is commutative, so the result never depends on the
-//! order sources were attached in.
+//! Placeholder
 
 use std::any::{TypeId, type_name};
 use std::marker::PhantomData;
 
 use bevy::prelude::*;
 
-/// One stage of the canonical fold.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StatOp {
-    /// Stage 1: added to the base.
     Flat(f32),
-    /// Stage 2: multiplies the flat-adjusted value.
     Mult(f32),
 }
 
@@ -28,9 +17,6 @@ struct StatEntry {
     op: StatOp,
 }
 
-/// Per-stat modifier list on the model. `S` is a zero-sized stat marker
-/// (e.g. [`Cooldown`]); the entries are private, so all mutation goes
-/// through the typed, source-tagged methods.
 #[derive(Component)]
 pub struct StatModifiers<S: Send + Sync + 'static> {
     entries: Vec<StatEntry>,
@@ -47,8 +33,6 @@ impl<S: Send + Sync + 'static> Default for StatModifiers<S> {
 }
 
 impl<S: Send + Sync + 'static> StatModifiers<S> {
-    /// Replace-by-tag: a source has at most one op per stat, so
-    /// re-application is idempotent — a buggy double-add cannot stack.
     pub fn set<Source: Component>(&mut self, op: StatOp) {
         let source = TypeId::of::<Source>();
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.source == source) {
@@ -71,8 +55,6 @@ impl<S: Send + Sync + 'static> StatModifiers<S> {
         self.entries.is_empty()
     }
 
-    /// The canonical fold. Clamping (e.g. "cooldown can't go negative") is
-    /// the stat owner's policy, applied where the base fact lives.
     pub fn apply_to(&self, base: f32) -> f32 {
         let flat: f32 = self
             .entries
@@ -94,15 +76,17 @@ impl<S: Send + Sync + 'static> StatModifiers<S> {
     }
 }
 
-/// Stat marker: how long an item needs between uses.
-pub struct Cooldown;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cooldown(pub f32);
+
+impl Cooldown {
+    pub fn effective(self, modifiers: Option<&CooldownModifiers>) -> Cooldown {
+        Cooldown(modifiers.map_or(self.0, |m| m.apply_to(self.0)).max(0.0))
+    }
+}
 
 pub type CooldownModifiers = StatModifiers<Cooldown>;
 
-/// The door sources register and clean up through, source-first so calls
-/// read naturally: `set_stat_modifier::<Rusty, Cooldown>(..)` — "set
-/// Rusty's Cooldown modifier". Both operations are safe against the model
-/// dying mid-flight: they no-op on a missing entity.
 pub trait StatModifierCommands {
     fn set_stat_modifier<Source: Component, S: Send + Sync + 'static>(
         &mut self,
@@ -151,9 +135,6 @@ impl StatModifierCommands for EntityCommands<'_> {
     }
 }
 
-/// Dev-build watchdog for the one discipline this design asks of sources:
-/// clean up what you registered. An entry whose source component is gone
-/// is a leak — loud here instead of a silent phantom modifier.
 #[cfg(debug_assertions)]
 pub(crate) fn check_stat_source_leaks<S: Send + Sync + 'static>(
     items: Query<EntityRef, With<StatModifiers<S>>>,
