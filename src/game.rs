@@ -2,32 +2,28 @@ use bevy::ecs::component::Components;
 use bevy::prelude::*;
 
 use crate::{
-    CursorLocked, EYE_HEIGHT, GroundedSecs, Gun, Item, ItemKey, ItemRegistry, ItemState,
-    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, Rusty, View, ViewOf, look_around,
-    register_builtin_items, toggle_cursor, update_player, view_on_rust, view_on_state_change,
+    Ammo, Contains, Cooldown, CursorLocked, CursorSystems, EYE_HEIGHT, Firearm, GroundedSecs,
+    HandSocket, InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemTransitions,
+    LookTarget, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, View, ViewOf,
+    inspect_lines, look_around, toggle_cursor, update_player,
 };
 
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        let mut registry = ItemRegistry::default();
-        register_builtin_items(&mut registry);
-
         app.insert_resource(CursorLocked::default())
-            .insert_resource(registry)
-            .add_observer(view_on_state_change)
-            .add_observer(view_on_rust)
-            .add_systems(Startup, (setup, spawn_gun))
+            .add_plugins(ItemPlugin)
+            .add_systems(Startup, (setup, spawn_guns))
             .add_systems(
                 Update,
                 (
-                    toggle_cursor,
+                    toggle_cursor.in_set(CursorSystems),
                     look_around,
                     update_player,
-                    pickup_item,
-                    drop_item,
-                    rust_grounded_items,
+                    pickup_items,
+                    equip_from_bag,
+                    drop_equipped,
                     update_hud,
                 ),
             );
@@ -36,19 +32,15 @@ impl Plugin for GamePlugin {
 
 const PICKUP_RANGE: f32 = 1.5;
 const DROP_DISTANCE: f32 = 2.0;
-/// Cumulative seconds on the ground before an item rusts.
-const RUST_AFTER_SECS: f32 = 5.0;
 
+/// Which line of the HUD a text node renders.
 #[derive(Component)]
-struct ModelHudText;
-
-#[derive(Component)]
-struct ViewHudText;
-
-/// The `Without`s prove to the scheduler that the text nodes are disjoint
-/// from the `EntityRef` queries over models and views.
-type HudTextQuery<'w, 's, T, O> =
-    Query<'w, 's, &'static mut Text, (With<T>, Without<O>, Without<Item>, Without<ViewOf>)>;
+enum HudLine {
+    Target,
+    Carrying,
+    Models,
+    Views,
+}
 
 fn setup(
     mut commands: Commands,
@@ -93,135 +85,156 @@ fn setup(
                 })),
                 Transform::from_xyz(0.3, -0.3, -0.5),
             ));
+            // The attachment point for equipped items; its transform alone
+            // decides where held items sit.
+            parent.spawn((
+                HandSocket,
+                Transform::from_xyz(-0.3, -0.3, -0.6),
+                Visibility::default(),
+            ));
         });
 
-    commands.spawn((
-        Node {
+    // One flex column: blocks are multi-line and wrap, so they must push
+    // each other down instead of sitting at fixed offsets.
+    commands
+        .spawn(Node {
             position_type: PositionType::Absolute,
             top: Val::Px(10.0),
             left: Val::Px(10.0),
+            max_width: Val::Percent(55.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
             ..default()
-        },
-        Text::new("model:"),
-        TextFont {
-            font_size: FontSize::Px(18.0),
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        ModelHudText,
-    ));
-
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(40.0),
-            left: Val::Px(10.0),
-            ..default()
-        },
-        Text::new("view:"),
-        TextFont {
-            font_size: FontSize::Px(18.0),
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        ViewHudText,
-    ));
+        })
+        .with_children(|parent| {
+            for line in [
+                HudLine::Target,
+                HudLine::Carrying,
+                HudLine::Models,
+                HudLine::Views,
+            ] {
+                parent.spawn((
+                    Text::default(),
+                    TextFont {
+                        font_size: FontSize::Px(16.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    line,
+                ));
+            }
+        });
 }
 
-fn spawn_gun(mut commands: Commands) {
-    // Spawning the model is all it takes: the `On<Insert, ItemState>`
-    // observer builds the view.
-    commands.spawn((
-        Item {
-            key: ItemKey("core::item::gun".to_string()),
-            label: "Gun".to_string(),
-        },
-        Gun,
-        GroundedSecs::default(),
-        ItemState::OnGround(Vec3::new(0.0, 0.0, -5.0)),
-    ));
+/// An item enters the world by being dropped into it: the model bundle
+/// carries only durable data, and `drop_at` gives it its state and position
+/// through the same door every other transition uses.
+fn spawn_guns(mut commands: Commands) {
+    for (n, pos) in [Vec3::new(0.0, 0.0, -5.0), Vec3::new(3.0, 0.0, -6.5)]
+        .into_iter()
+        .enumerate()
+    {
+        commands
+            .spawn((
+                Item {
+                    key: ItemKey("core::item::gun".to_string()),
+                    label: format!("Gun {}", n + 1),
+                },
+                Firearm {
+                    cooldown: Cooldown(0.5),
+                    magazine_size: 8,
+                },
+                Ammo(8),
+                GroundedSecs::default(),
+                Visibility::default(),
+            ))
+            .drop_at(pos);
+    }
 }
 
-/// Walking over a grounded item picks it up. The transition is a single
-/// component re-insert on the model; the observer does the rest.
-fn pickup_item(
+/// Walking over a grounded item stows it in the bag. `Q` draws it.
+fn pickup_items(
     player: Query<(Entity, &Transform), With<Player>>,
-    items: Query<(Entity, &ItemState), With<Item>>,
+    items: Query<(Entity, &ItemState, &Transform), With<Item>>,
     mut commands: Commands,
 ) {
     let Ok((player_e, player_t)) = player.single() else {
         return;
     };
 
-    for (item_e, state) in &items {
-        let ItemState::OnGround(pos) = state else {
+    for (item_e, state, item_t) in &items {
+        if !state.is_on_ground() {
             continue;
-        };
-        let dist = (player_t.translation - *pos).with_y(0.0).length();
+        }
+        let dist = (player_t.translation - item_t.translation)
+            .with_y(0.0)
+            .length();
         if dist < PICKUP_RANGE {
-            commands
-                .entity(item_e)
-                .insert(ItemState::EquippedBy(player_e));
+            commands.entity(item_e).store_in(player_e);
         }
     }
 }
 
-/// G drops the equipped item in front of the player.
-fn drop_item(
+/// `Q` equips the first stowed item. `equip_to`'s policy stows whatever was
+/// in the hand, so repeated presses cycle through the bag.
+fn equip_from_bag(
     keys: Res<ButtonInput<KeyCode>>,
-    player: Query<(Entity, &Transform), With<Player>>,
-    items: Query<(Entity, &ItemState), With<Item>>,
+    player: Query<(Entity, Option<&Contains>), With<Player>>,
+    states: Query<&ItemState, With<Item>>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::KeyQ) {
+        return;
+    }
+    let Ok((player_e, Some(contains))) = player.single() else {
+        return;
+    };
+    let stored = contains
+        .iter()
+        .find(|&held| states.get(held).is_ok_and(ItemState::is_stored));
+    if let Some(item) = stored {
+        commands.entity(item).equip_to(player_e);
+    }
+}
+
+/// `G` drops the equipped item in front of the player.
+fn drop_equipped(
+    keys: Res<ButtonInput<KeyCode>>,
+    player: Query<(&Transform, Option<&Contains>), With<Player>>,
+    states: Query<&ItemState, With<Item>>,
     mut commands: Commands,
 ) {
     if !keys.just_pressed(KeyCode::KeyG) {
         return;
     }
-    let Ok((player_e, player_t)) = player.single() else {
+    let Ok((player_t, Some(contains))) = player.single() else {
         return;
     };
-
-    for (item_e, state) in &items {
-        if !matches!(state, ItemState::EquippedBy(holder) if *holder == player_e) {
-            continue;
-        }
+    let equipped = contains
+        .iter()
+        .find(|&held| states.get(held).is_ok_and(ItemState::is_equipped));
+    if let Some(item) = equipped {
         let forward = player_t.forward().with_y(0.0).normalize_or_zero();
         let pos = (player_t.translation + forward * DROP_DISTANCE).with_y(PLATFORM_TOP_Y);
-        commands.entity(item_e).insert(ItemState::OnGround(pos));
-        return;
+        commands.entity(item).drop_at(pos);
     }
 }
 
-/// Ground exposure accumulates on the model and eventually rusts it. `Rusty`
-/// goes on the model entity, so it survives every later transition — this is
-/// the property the whole architecture exists to guarantee.
-type RustableItems<'w, 's> = Query<
-    'w,
-    's,
-    (Entity, &'static ItemState, &'static mut GroundedSecs),
-    (With<Item>, Without<Rusty>),
->;
+/// Shows the split live: model lines keep their entity ids and grow
+/// components across transitions, view lines change entity per transition,
+/// and the carrying line demonstrates the O(1) reverse query through
+/// `Contains`.
+type HudTexts<'w, 's> =
+    Query<'w, 's, (&'static mut Text, &'static HudLine), (Without<Item>, Without<ViewOf>)>;
 
-fn rust_grounded_items(time: Res<Time>, mut items: RustableItems, mut commands: Commands) {
-    for (item_e, state, mut grounded) in &mut items {
-        if !matches!(state, ItemState::OnGround(_)) {
-            continue;
-        }
-        grounded.0 += time.delta_secs();
-        if grounded.0 >= RUST_AFTER_SECS {
-            commands.entity(item_e).insert(Rusty);
-        }
-    }
-}
-
-/// Shows the split live: the model line keeps the same entity id and grows
-/// components (Rusty), while the view line's entity id changes on every
-/// transition.
 fn update_hud(
     models: Query<EntityRef, With<Item>>,
     views: Query<EntityRef, With<ViewOf>>,
+    player: Query<Option<&Contains>, With<Player>>,
+    target: Res<LookTarget>,
+    contributors: Res<InspectContributors>,
     components: &Components,
-    mut model_text: HudTextQuery<ModelHudText, ViewHudText>,
-    mut view_text: HudTextQuery<ViewHudText, ModelHudText>,
+    mut texts: HudTexts,
 ) {
     let component_names = |entity: EntityRef| -> String {
         entity
@@ -237,31 +250,80 @@ fn update_hud(
             .collect::<Vec<_>>()
             .join(", ")
     };
-
-    let model_line = match models.iter().next() {
-        Some(model) => format!("model: {} [{}]", model.id(), component_names(model)),
-        None => "model: <none>".to_string(),
-    };
-    let view_line = match models
-        .iter()
-        .next()
-        .and_then(|model| model.get::<View>())
-        .and_then(View::entity)
-        .and_then(|view| views.get(view).ok())
-    {
-        Some(view) => format!("view: {} [{}]", view.id(), component_names(view)),
-        None => "view: <none>".to_string(),
-    };
-
-    // Only write on change so the UI doesn't relayout every frame.
-    if let Ok(mut text) = model_text.single_mut()
-        && text.0 != model_line
-    {
-        text.0 = model_line;
+    fn label_of<'a>(model: EntityRef<'a>) -> &'a str {
+        model.get::<Item>().map_or("?", |item| item.label.as_str())
     }
-    if let Ok(mut text) = view_text.single_mut()
-        && text.0 != view_line
-    {
-        text.0 = view_line;
+
+    let mut model_lines: Vec<String> = models
+        .iter()
+        .map(|model| {
+            let state = model.get::<ItemState>().map(ItemState::kind);
+            format!(
+                "{} {} {:?} [{}]",
+                label_of(model),
+                model.id(),
+                state,
+                component_names(model)
+            )
+        })
+        .collect();
+    model_lines.sort();
+
+    let mut view_lines: Vec<String> = models
+        .iter()
+        .map(|model| {
+            let view = model
+                .get::<View>()
+                .and_then(View::entity)
+                .and_then(|view| views.get(view).ok());
+            match view {
+                Some(view) => format!(
+                    "{} view {} [{}]",
+                    label_of(model),
+                    view.id(),
+                    component_names(view)
+                ),
+                None => format!("{} view <none>", label_of(model)),
+            }
+        })
+        .collect();
+    view_lines.sort();
+
+    // The same renderer serves both inspection routes: the crosshair target
+    // (view raycast -> model) and the inventory (Contains -> model).
+    let target_line = match target.0.and_then(|model| models.get(model).ok()) {
+        Some(model) => format!(
+            "target: {}",
+            inspect_lines(model, &contributors).join(" · ")
+        ),
+        None => "target: <none>".to_string(),
+    };
+
+    let carrying = match player.single() {
+        Ok(Some(contains)) => {
+            let mut held: Vec<String> = contains
+                .iter()
+                .map(|item| match models.get(item) {
+                    Ok(model) => inspect_lines(model, &contributors).join(" · "),
+                    Err(_) => format!("{item}"),
+                })
+                .collect();
+            held.sort();
+            format!("carrying:\n  {}", held.join("\n  "))
+        }
+        _ => "carrying: <nothing>".to_string(),
+    };
+
+    for (mut text, line) in &mut texts {
+        let new = match line {
+            HudLine::Target => target_line.clone(),
+            HudLine::Models => model_lines.join("\n"),
+            HudLine::Views => view_lines.join("\n"),
+            HudLine::Carrying => carrying.clone(),
+        };
+        // Only write on change so the UI doesn't relayout every frame.
+        if text.0 != new {
+            text.0 = new;
+        }
     }
 }

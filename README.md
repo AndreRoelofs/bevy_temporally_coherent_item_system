@@ -2,7 +2,7 @@
 
 ## Problem
 
-In many games, an item is a different *object* in each of its states: the gun
+In many games, an item is a different object in each of its states: the gun
 lying on the ground, the gun in the player's hand, and the gun in a chest are
 separate spawns that merely share a mesh. Transitions then work by despawning
 one object and spawning another, and anything that accumulated on the old
@@ -10,52 +10,29 @@ object - wear, enchantments, ownership, history - is lost unless it is
 manually copied across. (This is a data-modeling choice, not something any
 particular paradigm forces; engines like Unity and Unreal can keep one object
 across states too. The interesting question is what architecture makes the
-persistent-item guarantee *structural* instead of a per-field copying
+persistent-item guarantee structural instead of a per-field copying
 discipline.)
 
-## Solution: model/view split
+## Solution: model/view split over three decomposed axes
 
-Each item is **one persistent model entity** that is spawned once and never
-rebuilt. Everything durable lives on it as plain components: `Item` (key,
-label), `ItemState`, `Gun`, `GroundedSecs`, `Rusty`, and whatever else other
-systems decide to attach. Because no code ever strips or regenerates the
-model, arbitrary accumulated components survive every transition *by
-construction* - there is no whitelist to maintain and no copying step to
-forget.
+Each item is one persistent model entity that is spawned once and kept track off through
+different states (Equipped, OnGround, Stored). During normal gameplay, arbitrary
+components are accumulated on the entity. When the item transitions to a different state,
+the accumulated components are preserved. They can be removed only by separate systems.
+This setup is especially useful for enabling rich mod support as third party code
+can easily add completely new mechanics to the game that affect existing systems and items.
 
-What changes with state is the **view**: a separate, disposable entity
-holding the renderable components, built from a `bsn!` scene and linked to
-its model with a relationship pair (`ViewOf` on the view, `View` on the
-model, with `linked_spawn` so the view dies with the model).
-
-The view is a pure function of the model:
-
-```text
-view = f(model)
-```
-
-- `ItemState` is an **immutable component**: the only way to transition is to
-  re-insert it, which fires `On<Insert, ItemState>` exactly once per
-  transition - no per-frame polling.
-- The observer despawns the old view, asks the `ItemRegistry` (string key →
-  scene function) for a new scene, spawns it with `Commands::spawn_scene`,
-  and parents it to the holder when equipped. No exclusive systems anywhere.
-- Scene functions receive the model as an `EntityRef`, so a view can react to
-  *any* model component: the gun's material turns rust-brown when the model
-  has `Rusty`.
-
-The demo makes the guarantee visible: leave the gun on the ground for a few
-seconds and `Rusty` appears on the model (the gun browns). Pick it up (`E`),
-drop it (`G`) - the HUD shows the model keeping the same entity id and all
-its components across every transition, while the view line shows a fresh
-entity id each time.
+The state transitions do require their own components. That is where the view in the model/view
+architecture comes in. For example we might want to display the gun as a mesh when it is held
+in hands of the player, and as a 2D image when it's in the inventory.
 
 ## Controls
 
 - Click to capture the mouse, `Esc` to release
 - `WASD` + mouse to move and look
-- Walk over a grounded item to pick it up
-- `G` - drop the equipped item (it lands just beyond pickup range)
+- Walk over a grounded item to stow it in the bag
+- `Q` - equip the first stowed item (the current weapon slides into the bag)
+- `G` - drop the equipped item just beyond pickup range
 
 ## Points of improvement
 
@@ -63,9 +40,6 @@ entity id each time.
   the official `.bsn` file loader lands, the `ItemRegistry` can map keys to
   scene assets instead of functions and item appearance becomes fully
   data-driven.
-- `EquippedBy`/`StoredIn` hold raw `Entity` ids inside an enum. At larger
-  scale these want to be proper relationship pairs so despawning a holder or
-  container cleans up automatically.
 
 ## License
 

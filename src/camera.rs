@@ -25,6 +25,9 @@ pub struct Player {
 #[derive(Resource, Default)]
 pub struct CursorLocked(pub bool);
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CursorSystems;
+
 pub fn toggle_cursor(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
