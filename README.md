@@ -7,11 +7,12 @@ lying on the ground, the gun in the player's hand, and the gun in a chest are
 separate spawns that merely share a mesh. Transitions then work by despawning
 one object and spawning another, and anything that accumulated on the old
 object - wear, enchantments, ownership, history - is lost unless it is
-manually copied across. (This is a data-modeling choice, not something any
-particular paradigm forces; engines like Unity and Unreal can keep one object
-across states too. The interesting question is what architecture makes the
-persistent-item guarantee structural instead of a per-field copying
-discipline.)
+manually copied across.
+
+While traditional game engines can and do preserve the accumulated components
+between the item states, the more interesting question is what architecture
+makes the persistent-item guarantee structural instead of a per-field copying
+discipline.
 
 ## Solution: model/view split over three decomposed axes
 
