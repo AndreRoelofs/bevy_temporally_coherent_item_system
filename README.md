@@ -69,18 +69,113 @@ void AMyCharacter::Equip(UGunInventoryItem* Item)
 }
 ```
 
-With the gun equipped the player wants to fire it. Let's handle the cooldown and `IsRusty` field:
+### Advanced OOP solution
+
+The advanced solution used by mature games looks different but has the same idea. Every item is split into layers:
+
+1. An immutable definition shared by every item - `UItemDefinition`
+2. A persistent model of an item. This is what is shared across ground, equipped and inventory states.
+3. A view of the item. 3D model for when it is on the ground or equipped, 2D image when in inventory.
+
+The item definition is composed of various fragments like so:
+```cpp
+class UItemDefinition : public UObject
+{
+public:
+    FText DisplayName;
+    TArray<UItemFragment*> Fragments; // This is what contains various unique aspects of an item
+};
+
+// Allows the item to be wielded by the player
+class UFragment_Equippable : public UItemFragment
+{
+public:
+    TSubclassOf<AGunWeapon> WeaponClass;
+};
+
+// Allows the item to shoot on a cooldown
+class UFragment_GunStats : public UItemFragment
+{
+public:
+    float FireCooldown;
+};
+```
+
+The persistent instance is created once, when the gun first enters the game. Note that it holds no typed gameplay state at all — a pointer to its shared definition, plus a generic tag map for everything that accumulates during play:
 
 ```cpp
-void AGunWeapon::Fire()
+class UItemInstance : public UObject
 {
-    float Cooldown = FireCooldown;
-    if (bIsRusty)
-    {
-        Cooldown *= 2.0f;
-    }
+public:
+    TSubclassOf<UItemDefinition> ItemDef;
 
-    SpawnProjectile();
+    template <typename FragmentT>
+    const FragmentT* FindFragmentByClass() const; // reads from the definition
+
+    void  AddStatTagStack(FGameplayTag Tag, int32 Count);
+    int32 GetStatTagStackCount(FGameplayTag Tag) const;
+
+private:
+    FGameplayTagStackContainer StatTags; // tag -> integer count, and nothing else
+};
+```
+
+Now the item can be persisted through different states. It also now has a nice way of accepting various tags that can accumulate during the gameplay like `Rusty`.
+
+```cpp
+struct FInventoryPickup
+{
+    TArray<TSubclassOf<UItemDefinition>> Templates; // "grant a fresh item of this type"
+    TArray<UItemInstance*>               Instances; // "carry this exact item"
+};
+
+void AMyCharacter::PickUp(AGunPickup* Pickup)
+{
+    for (UItemInstance* Item : Pickup->Inventory.Instances)
+    {
+        InventoryManager->AddItemInstance(Item); // the instance moves, nothing is copied
+    }
+    for (TSubclassOf<UItemDefinition> ItemDef : Pickup->Inventory.Templates)
+    {
+        InventoryManager->AddItemDefinition(ItemDef); // a brand-new instance is minted
+    }
+    Pickup->Destroy(); // only the 3D representation dies
+}
+```
+
+Equipping goes through one more layer. The item never becomes an actor itself: an equipment component reads the equippable fragment, spawns the visible weapon, and links it back to the item it stands for. The instance itself never leaves the inventory:
+
+```cpp
+void AMyCharacter::Equip(UItemInstance* Item)
+{
+    const UFragment_Equippable* Equippable = Item->FindFragmentByClass<UFragment_Equippable>();
+
+    // The equipment instance lives only while the item is equipped.
+    // It spawns the AGunWeapon actor and attaches it to the hand.
+    UEquipmentInstance* Equipment = EquipmentManager->EquipItem(Equippable);
+
+    // The spawned weapon can find its way back to the one true item
+    Equipment->SetInstigator(Item);
+}
+```
+
+The rusting mechanic now touches one object no matter the state. The pickup actor accrues ground time onto the instance, and anything that cares about rust reads it from the same place:
+
+```cpp
+// Runs once per second while the gun lies on the ground; the tag map
+// only counts whole numbers, so we count whole seconds
+void AGunPickup::AccrueRust()
+{
+    for (UItemInstance* Item : Inventory.Instances)
+    {
+        Item->AddStatTagStack(TAG_SecondsOnGround, 1);
+
+        if (Item->GetStatTagStackCount(TAG_SecondsOnGround) >= 5)
+        {
+            Item->AddStatTagStack(TAG_Rusty, 1);
+        }
+    }
+    // Items in Templates cannot rust: they do not exist yet
 }
 ```
 
