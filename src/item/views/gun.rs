@@ -2,9 +2,12 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use crate::{ItemDefinition, ItemRegistry, ItemStateKind, build_chrome_patch};
+use crate::{ItemDefinition, ItemIcon, ItemRegistry, ItemStateKind, build_chrome_patch};
 
 const GUN_COLOR: Color = Color::srgb(0.8, 0.8, 0.85);
+const ICON_COLOR: Color = Color::WHITE;
+const ICON_BORDER_COLOR: Color = Color::BLACK;
+const ICON_BORDER_PX: f32 = 2.0;
 
 pub struct GunViewPlugin;
 
@@ -34,6 +37,23 @@ impl Plugin for GunViewPlugin {
                 MeshMaterial3d<StandardMaterial>(material)
             },
         );
+        let icon_color = ICON_COLOR;
+        let icon_border = UiRect::all(Val::Px(ICON_BORDER_PX));
+        let icon_border_color = ICON_BORDER_COLOR;
+        let stored = build_chrome_patch(
+            world,
+            bsn! {
+                Node { border: icon_border }
+                BackgroundColor(icon_color)
+                BorderColor {
+                    top: icon_border_color,
+                    right: icon_border_color,
+                    bottom: icon_border_color,
+                    left: icon_border_color,
+                }
+                ItemIcon
+            },
+        );
 
         world.resource_mut::<ItemRegistry>().register(
             "core::item::gun",
@@ -41,6 +61,7 @@ impl Plugin for GunViewPlugin {
                 chrome: HashMap::from([
                     (ItemStateKind::OnGround, ground),
                     (ItemStateKind::Equipped, equipped),
+                    (ItemStateKind::Stored, stored),
                 ]),
             },
         );

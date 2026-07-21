@@ -10,10 +10,10 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformPlugin;
 use bevy_temporally_coherent_item_system::{
-    Ammo, Contains, Cooldown, CooldownModifiers, CursorLocked, FireOutcome, Firearm, GroundedSecs,
-    HandSocket, InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemStateKind,
-    ItemTransitions, LastShotAt, Player, Rusty, StatModifierCommands, StatOp, View, ViewOf,
-    inspect_lines, try_fire,
+    Ammo, CELL_PX, Contains, Cooldown, CooldownModifiers, CursorLocked, FireOutcome, Firearm,
+    GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryUi, Item, ItemFootprint,
+    ItemKey, ItemPacking, ItemPlugin, ItemState, ItemStateKind, ItemTransitions, LastShotAt,
+    PackedAt, Player, Rusty, StatModifierCommands, StatOp, View, ViewOf, inspect_lines, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -677,6 +677,291 @@ fn inspection_routes_agree_and_show_the_fold() {
         lines.iter().any(|line| line.contains("rusty")),
         "rust contributes its own line: {lines:?}"
     );
+}
+
+/// A holder whose storage is a grid — the survival-game backpack.
+fn spawn_bag_holder(app: &mut App, grid: UVec2) -> Entity {
+    let holder = app
+        .world_mut()
+        .spawn((Transform::default(), InventoryGrid::new(grid)))
+        .id();
+    app.update();
+    holder
+}
+
+fn spawn_sized_gun(app: &mut App, label: &str, pos: Vec3, footprint: UVec2) -> Entity {
+    let model = spawn_gun(app, label, pos);
+    app.world_mut()
+        .entity_mut(model)
+        .insert(ItemFootprint(footprint));
+    model
+}
+
+fn panel_of(app: &App, holder: Entity) -> Entity {
+    app.world()
+        .get::<InventoryUi>(holder)
+        .and_then(InventoryUi::entity)
+        .expect("gridded holder has an inventory panel")
+}
+
+fn packed_origin(app: &App, model: Entity) -> Option<UVec2> {
+    app.world().get::<PackedAt>(model).map(PackedAt::origin)
+}
+
+fn background_of(app: &App, entity: Entity) -> Option<Color> {
+    app.world()
+        .get::<BackgroundColor>(entity)
+        .map(|background| background.0)
+}
+
+#[test]
+fn stored_items_pack_into_the_grid_with_icons() {
+    let mut app = test_app();
+    let holder = spawn_bag_holder(&mut app, UVec2::new(12, 8));
+    let panel = panel_of(&app, holder);
+    let pistol = spawn_sized_gun(&mut app, "Pistol", Vec3::ZERO, UVec2::new(4, 4));
+    let rifle = spawn_sized_gun(&mut app, "Rifle", Vec3::X, UVec2::new(8, 4));
+
+    with_commands(&mut app, |commands| {
+        commands.entity(pistol).store_in(holder);
+        commands.entity(rifle).store_in(holder);
+    });
+
+    assert_eq!(packed_origin(&app, pistol), Some(UVec2::ZERO));
+    assert_eq!(
+        packed_origin(&app, rifle),
+        Some(UVec2::new(4, 0)),
+        "first fit packs the rifle beside the pistol"
+    );
+
+    // The stored state has a view after all: a 2D icon on the bag's panel,
+    // spawned through the same registry/refresh pipeline as the 3D views.
+    let icon = view_entity(&app, rifle).expect("stored item in a gridded bag has an icon");
+    assert_eq!(
+        app.world().get::<ChildOf>(icon).map(ChildOf::parent),
+        Some(panel),
+        "icons live on the container's panel"
+    );
+    let node = app.world().get::<Node>(icon).expect("icons are UI nodes");
+    assert_eq!(node.left, Val::Px(4.0 * CELL_PX));
+    assert_eq!(node.top, Val::Px(0.0));
+    assert_eq!(node.width, Val::Px(8.0 * CELL_PX));
+    assert_eq!(node.height, Val::Px(4.0 * CELL_PX));
+    assert_eq!(
+        background_of(&app, icon),
+        Some(Color::WHITE),
+        "the item image is a pure white fill"
+    );
+    assert_eq!(
+        node.border,
+        UiRect::all(Val::Px(2.0)),
+        "icons carry their own outline"
+    );
+    assert_eq!(
+        app.world().get::<BorderColor>(icon),
+        Some(&BorderColor::all(Color::BLACK)),
+        "the outline is black so adjacent icons stay distinct"
+    );
+}
+
+#[test]
+fn a_full_bag_refuses_the_item_and_regrounds_it() {
+    let mut app = test_app();
+    let holder_pos = Vec3::new(2.0, 0.0, 3.0);
+    let holder = app
+        .world_mut()
+        .spawn((
+            Transform::from_translation(holder_pos),
+            InventoryGrid::new(UVec2::new(4, 4)),
+        ))
+        .id();
+    app.update();
+    let first = spawn_sized_gun(&mut app, "First", Vec3::ZERO, UVec2::new(4, 4));
+    let second = spawn_sized_gun(&mut app, "Second", Vec3::X, UVec2::new(4, 4));
+
+    with_commands(&mut app, |commands| {
+        commands.entity(first).store_in(holder);
+        commands.entity(second).store_in(holder);
+    });
+
+    assert_eq!(kind(&app, first), Some(ItemStateKind::Stored));
+    assert_eq!(
+        kind(&app, second),
+        Some(ItemStateKind::OnGround),
+        "no room — the repair net re-grounds the item instead of leaving it spotless"
+    );
+    assert_eq!(
+        app.world().get::<Transform>(second).map(|t| t.translation),
+        Some(holder_pos),
+        "the refused item lands at the holder"
+    );
+    assert!(packed_origin(&app, second).is_none());
+    let view = view_entity(&app, second).expect("re-grounded items get a ground view");
+    assert_eq!(
+        app.world().get::<ChildOf>(view).map(ChildOf::parent),
+        Some(second)
+    );
+}
+
+#[test]
+fn rust_tints_the_icon_and_repair_restores_it() {
+    let mut app = test_app();
+    let holder = spawn_bag_holder(&mut app, UVec2::new(12, 8));
+    let model = spawn_sized_gun(&mut app, "Gun", Vec3::ZERO, UVec2::new(4, 4));
+    with_commands(&mut app, |commands| {
+        commands.entity(model).store_in(holder);
+    });
+    let icon = view_entity(&app, model).expect("icon exists");
+    assert_eq!(background_of(&app, icon), Some(Color::WHITE));
+
+    app.world_mut().entity_mut(model).insert(Rusty);
+    app.update();
+    assert_eq!(
+        view_entity(&app, model),
+        Some(icon),
+        "a cosmetic change adjusts the icon in place, no respawn"
+    );
+    let rusted = background_of(&app, icon).expect("icon still has a background");
+    assert_ne!(rusted, Color::WHITE, "rust tints the 2D image too");
+
+    // An icon rebuilt after a round trip through the world comes out rusty.
+    with_commands(&mut app, |commands| {
+        commands.entity(model).drop_at(Vec3::X);
+    });
+    with_commands(&mut app, |commands| {
+        commands.entity(model).store_in(holder);
+    });
+    let icon = view_entity(&app, model).expect("icon exists");
+    assert_eq!(background_of(&app, icon), Some(rusted));
+
+    app.world_mut().entity_mut(model).remove::<Rusty>();
+    app.update();
+    assert_eq!(
+        background_of(&app, icon),
+        Some(Color::WHITE),
+        "repairing the rust restores the pure white image"
+    );
+}
+
+#[test]
+fn packing_memory_survives_transitions() {
+    let mut app = test_app();
+    let holder = spawn_bag_holder(&mut app, UVec2::new(12, 8));
+    let model = spawn_sized_gun(&mut app, "Gun", Vec3::ZERO, UVec2::new(4, 4));
+    with_commands(&mut app, |commands| {
+        commands.entity(model).store_in(holder);
+    });
+    assert_eq!(packed_origin(&app, model), Some(UVec2::ZERO));
+
+    with_commands(&mut app, |commands| {
+        commands.entity(model).repack_at(UVec2::new(5, 3));
+    });
+    assert_eq!(
+        packed_origin(&app, model),
+        Some(UVec2::new(5, 3)),
+        "deliberate packing moves the item"
+    );
+    let icon = view_entity(&app, model).expect("icon exists");
+    let node = app.world().get::<Node>(icon).expect("icon node");
+    assert_eq!(
+        node.left,
+        Val::Px(5.0 * CELL_PX),
+        "the icon follows the repack"
+    );
+    assert_eq!(node.top, Val::Px(3.0 * CELL_PX));
+
+    with_commands(&mut app, |commands| {
+        commands.entity(model).equip_to(holder);
+    });
+    with_commands(&mut app, |commands| {
+        commands.entity(model).drop_at(Vec3::X);
+    });
+    assert_eq!(
+        packed_origin(&app, model),
+        Some(UVec2::new(5, 3)),
+        "the spot is remembered while the item is out of the bag"
+    );
+
+    with_commands(&mut app, |commands| {
+        commands.entity(model).store_in(holder);
+    });
+    assert_eq!(
+        packed_origin(&app, model),
+        Some(UVec2::new(5, 3)),
+        "re-stowing returns the item to its remembered spot"
+    );
+}
+
+#[test]
+fn repacking_rejects_overlap_and_out_of_bounds() {
+    let mut app = test_app();
+    let holder = spawn_bag_holder(&mut app, UVec2::new(12, 8));
+    let pistol = spawn_sized_gun(&mut app, "Pistol", Vec3::ZERO, UVec2::new(4, 4));
+    let rifle = spawn_sized_gun(&mut app, "Rifle", Vec3::X, UVec2::new(8, 4));
+    with_commands(&mut app, |commands| {
+        commands.entity(pistol).store_in(holder);
+        commands.entity(rifle).store_in(holder);
+    });
+    assert_eq!(packed_origin(&app, rifle), Some(UVec2::new(4, 0)));
+
+    with_commands(&mut app, |commands| {
+        commands.entity(rifle).repack_at(UVec2::new(2, 2));
+    });
+    assert_eq!(
+        packed_origin(&app, rifle),
+        Some(UVec2::new(4, 0)),
+        "a spot overlapping the pistol is refused"
+    );
+
+    with_commands(&mut app, |commands| {
+        commands.entity(rifle).repack_at(UVec2::new(5, 0));
+    });
+    assert_eq!(
+        packed_origin(&app, rifle),
+        Some(UVec2::new(4, 0)),
+        "a spot past the right edge is refused"
+    );
+
+    with_commands(&mut app, |commands| {
+        commands.entity(rifle).repack_at(UVec2::new(2, 4));
+    });
+    assert_eq!(
+        packed_origin(&app, rifle),
+        Some(UVec2::new(2, 4)),
+        "a free in-bounds spot is accepted"
+    );
+}
+
+#[test]
+fn equip_swap_repacks_the_demoted_weapon() {
+    let mut app = test_app();
+    // A bag exactly the rifle's size: the swap only works because the
+    // incoming weapon is promoted out of the grid before the old one
+    // returns to Stored.
+    let holder = spawn_bag_holder(&mut app, UVec2::new(8, 4));
+    let rifle = spawn_sized_gun(&mut app, "Rifle", Vec3::ZERO, UVec2::new(8, 4));
+    let pistol = spawn_sized_gun(&mut app, "Pistol", Vec3::X, UVec2::new(4, 4));
+
+    with_commands(&mut app, |commands| {
+        commands.entity(rifle).store_in(holder);
+    });
+    with_commands(&mut app, |commands| {
+        commands.entity(rifle).equip_to(holder);
+    });
+    with_commands(&mut app, |commands| {
+        commands.entity(pistol).store_in(holder);
+    });
+    with_commands(&mut app, |commands| {
+        commands.entity(pistol).equip_to(holder);
+    });
+
+    assert_eq!(
+        kind(&app, rifle),
+        Some(ItemStateKind::Stored),
+        "the demoted rifle fits back in because the pistol left the grid first"
+    );
+    assert_eq!(packed_origin(&app, rifle), Some(UVec2::ZERO));
+    assert_eq!(kind(&app, pistol), Some(ItemStateKind::Equipped));
 }
 
 #[test]

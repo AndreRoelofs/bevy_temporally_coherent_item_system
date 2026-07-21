@@ -2,12 +2,14 @@ use bevy::prelude::*;
 
 mod components;
 mod inspect;
+mod inventory;
 mod registry;
 mod stats;
 mod views;
 
 pub use components::*;
 pub use inspect::*;
+pub use inventory::*;
 pub use registry::*;
 pub use stats::*;
 pub use views::*;
@@ -18,7 +20,7 @@ impl Plugin for ItemPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LookTarget>()
             .init_resource::<InspectContributors>()
-            .add_plugins((ItemComponentsPlugin, ItemViewsPlugin))
+            .add_plugins((ItemComponentsPlugin, InventoryPlugin, ItemViewsPlugin))
             .add_observer(ground_items_of_dying_holder)
             .add_observer(repair_on_link_lost)
             .add_systems(Update, inspect::look_at_target);
@@ -37,6 +39,7 @@ impl Plugin for ItemPlugin {
 pub struct ItemKey(pub String);
 
 #[derive(Component, Clone)]
+#[require(ItemFootprint)]
 pub struct Item {
     pub key: ItemKey,
     pub label: String,
@@ -116,6 +119,7 @@ pub trait ItemTransitions {
 impl ItemTransitions for EntityCommands<'_> {
     fn equip_to(&mut self, holder: Entity) -> &mut Self {
         self.queue(move |mut item: EntityWorldMut| {
+            let model = item.id();
             let demote: Vec<Entity> = item.world_scope(|world| {
                 let Ok(holder_ref) = world.get_entity(holder) else {
                     warn!("equip_to: holder {holder} does not exist");
@@ -127,9 +131,10 @@ impl ItemTransitions for EntityCommands<'_> {
                         contains
                             .iter()
                             .filter(|&held| {
-                                world
-                                    .get::<ItemState>(held)
-                                    .is_some_and(ItemState::is_equipped)
+                                held != model
+                                    && world
+                                        .get::<ItemState>(held)
+                                        .is_some_and(ItemState::is_equipped)
                             })
                             .collect()
                     })
@@ -138,6 +143,7 @@ impl ItemTransitions for EntityCommands<'_> {
             if item.world().get_entity(holder).is_err() {
                 return;
             }
+            item.insert((ItemState(ItemStateKind::Equipped), ContainedBy(holder)));
             item.world_scope(|world| {
                 for held in demote {
                     world
@@ -145,7 +151,6 @@ impl ItemTransitions for EntityCommands<'_> {
                         .insert(ItemState(ItemStateKind::Stored));
                 }
             });
-            item.insert((ItemState(ItemStateKind::Equipped), ContainedBy(holder)));
         });
         self
     }

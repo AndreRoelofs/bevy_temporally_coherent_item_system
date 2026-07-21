@@ -28,6 +28,16 @@ pub struct CursorLocked(pub bool);
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CursorSystems;
 
+pub fn set_cursor_lock(cursor: &mut CursorOptions, locked: &mut CursorLocked, lock: bool) {
+    cursor.grab_mode = if lock {
+        CursorGrabMode::Locked
+    } else {
+        CursorGrabMode::None
+    };
+    cursor.visible = !lock;
+    locked.0 = lock;
+}
+
 pub fn toggle_cursor(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -39,14 +49,10 @@ pub fn toggle_cursor(
     };
 
     if mouse_buttons.just_pressed(MouseButton::Left) {
-        cursor.grab_mode = CursorGrabMode::Locked;
-        cursor.visible = false;
-        locked.0 = true;
+        set_cursor_lock(&mut cursor, &mut locked, true);
     }
     if keys.just_pressed(KeyCode::Escape) {
-        cursor.grab_mode = CursorGrabMode::None;
-        cursor.visible = true;
-        locked.0 = false;
+        set_cursor_lock(&mut cursor, &mut locked, false);
     }
 }
 

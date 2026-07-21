@@ -1,29 +1,17 @@
-//! Placeholder
-
 use bevy::prelude::*;
 
-use super::{View, ViewOf};
+use super::{View, ViewOf, ViewTint};
 use crate::{InspectContributors, Item, Rusty};
 
 const RUST_COLOR: Color = Color::srgb(0.54, 0.27, 0.07);
-
-#[derive(Resource)]
-struct RustMaterial(Handle<StandardMaterial>);
-
-impl FromWorld for RustMaterial {
-    fn from_world(world: &mut World) -> Self {
-        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        Self(materials.add(StandardMaterial::from(RUST_COLOR)))
-    }
-}
 
 pub struct RustyViewPlugin;
 
 impl Plugin for RustyViewPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RustMaterial>()
-            .add_observer(recolor_on_rust)
-            .add_observer(recolor_new_views);
+        app.add_observer(tint_on_rust)
+            .add_observer(tint_new_views)
+            .add_observer(untint_on_rust_removal);
         app.world_mut()
             .resource_mut::<InspectContributors>()
             .register(rust_inspect_line);
@@ -36,25 +24,19 @@ fn rust_inspect_line(model: EntityRef) -> Option<String> {
         .then(|| "rusty — cooldown ×2".to_string())
 }
 
-fn recolor_on_rust(
-    add: On<Add, Rusty>,
-    models: Query<&View, With<Item>>,
-    rust: Res<RustMaterial>,
-    mut commands: Commands,
-) {
+fn tint_on_rust(add: On<Add, Rusty>, models: Query<&View, With<Item>>, mut commands: Commands) {
     let Ok(Some(view)) = models.get(add.event().entity).map(View::entity) else {
         return;
     };
     if let Ok(mut view) = commands.get_entity(view) {
-        view.try_insert(MeshMaterial3d(rust.0.clone()));
+        view.try_insert(ViewTint(RUST_COLOR));
     }
 }
 
-fn recolor_new_views(
+fn tint_new_views(
     add: On<Add, ViewOf>,
     views: Query<&ViewOf>,
     rusty_models: Query<(), With<Rusty>>,
-    rust: Res<RustMaterial>,
     mut commands: Commands,
 ) {
     let view = add.event().entity;
@@ -65,6 +47,21 @@ fn recolor_new_views(
         return;
     }
     if let Ok(mut view) = commands.get_entity(view) {
-        view.try_insert(MeshMaterial3d(rust.0.clone()));
+        view.try_insert(ViewTint(RUST_COLOR));
     }
+}
+
+fn untint_on_rust_removal(
+    remove: On<Remove, Rusty>,
+    models: Query<&View, With<Item>>,
+    mut commands: Commands,
+) {
+    let Ok(Some(view)) = models.get(remove.event().entity).map(View::entity) else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        if let Ok(mut view) = world.get_entity_mut(view) {
+            view.remove::<ViewTint>();
+        }
+    });
 }

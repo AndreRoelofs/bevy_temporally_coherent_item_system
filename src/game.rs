@@ -1,11 +1,14 @@
 use bevy::ecs::component::Components;
 use bevy::prelude::*;
+use bevy::window::{CursorOptions, PrimaryWindow};
 
 use crate::{
     Ammo, Contains, Cooldown, CursorLocked, CursorSystems, EYE_HEIGHT, Firearm, GroundedSecs,
-    HandSocket, InspectContributors, Item, ItemKey, ItemPlugin, ItemState, ItemTransitions,
-    LookTarget, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, Player, View, ViewOf,
-    inspect_lines, look_around, toggle_cursor, update_player,
+    HandSocket, InspectContributors, InventoryGrid, InventoryOpen, InventoryUi, InventoryUiOf,
+    Item, ItemFootprint, ItemKey, ItemPlugin, ItemState, ItemTransitions, LookTarget,
+    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, PackedAt, Player, View, ViewOf,
+    find_free_slot, inspect_lines, inventory_closed, look_around, set_cursor_lock, toggle_cursor,
+    update_player,
 };
 
 pub struct GamePlugin;
@@ -18,7 +21,8 @@ impl Plugin for GamePlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_cursor.in_set(CursorSystems),
+                    toggle_cursor.in_set(CursorSystems).run_if(inventory_closed),
+                    toggle_inventory,
                     look_around,
                     update_player,
                     pickup_items,
@@ -33,7 +37,6 @@ impl Plugin for GamePlugin {
 const PICKUP_RANGE: f32 = 1.5;
 const DROP_DISTANCE: f32 = 2.0;
 
-/// Which line of the HUD a text node renders.
 #[derive(Component)]
 enum HudLine {
     Target,
@@ -70,6 +73,7 @@ fn setup(
             Camera3d::default(),
             Transform::from_xyz(0.0, PLATFORM_TOP_Y + EYE_HEIGHT, 0.0),
             Player::default(),
+            InventoryGrid::new(UVec2::new(12, 8)),
             AmbientLight {
                 brightness: 200.0,
                 ..default()
@@ -85,8 +89,6 @@ fn setup(
                 })),
                 Transform::from_xyz(0.3, -0.3, -0.5),
             ));
-            // The attachment point for equipped items; its transform alone
-            // decides where held items sit.
             parent.spawn((
                 HandSocket,
                 Transform::from_xyz(-0.3, -0.3, -0.6),
@@ -94,8 +96,6 @@ fn setup(
             ));
         });
 
-    // One flex column: blocks are multi-line and wrap, so they must push
-    // each other down instead of sitting at fixed offsets.
     commands
         .spawn(Node {
             position_type: PositionType::Absolute,
@@ -126,20 +126,19 @@ fn setup(
         });
 }
 
-/// An item enters the world by being dropped into it: the model bundle
-/// carries only durable data, and `drop_at` gives it its state and position
-/// through the same door every other transition uses.
 fn spawn_guns(mut commands: Commands) {
-    for (n, pos) in [Vec3::new(0.0, 0.0, -5.0), Vec3::new(3.0, 0.0, -6.5)]
-        .into_iter()
-        .enumerate()
-    {
+    let guns = [
+        (Vec3::new(0.0, 0.0, -5.0), UVec2::new(4, 4)),
+        (Vec3::new(3.0, 0.0, -6.5), UVec2::new(8, 4)),
+    ];
+    for (n, (pos, footprint)) in guns.into_iter().enumerate() {
         commands
             .spawn((
                 Item {
                     key: ItemKey("core::item::gun".to_string()),
                     label: format!("Gun {}", n + 1),
                 },
+                ItemFootprint(footprint),
                 Firearm {
                     cooldown: Cooldown(0.5),
                     magazine_size: 8,
@@ -152,31 +151,94 @@ fn spawn_guns(mut commands: Commands) {
     }
 }
 
-/// Walking over a grounded item stows it in the bag. `Q` draws it.
+#[expect(clippy::type_complexity)]
 fn pickup_items(
-    player: Query<(Entity, &Transform), With<Player>>,
-    items: Query<(Entity, &ItemState, &Transform), With<Item>>,
+    player: Query<
+        (
+            Entity,
+            &Transform,
+            Option<&InventoryGrid>,
+            Option<&Contains>,
+        ),
+        With<Player>,
+    >,
+    items: Query<
+        (
+            Entity,
+            &ItemState,
+            &Transform,
+            &ItemFootprint,
+            Option<&PackedAt>,
+        ),
+        With<Item>,
+    >,
+    layouts: Query<(&ItemState, &PackedAt, &ItemFootprint), With<Item>>,
     mut commands: Commands,
 ) {
-    let Ok((player_e, player_t)) = player.single() else {
+    let Ok((player_e, player_t, grid, contains)) = player.single() else {
         return;
     };
 
-    for (item_e, state, item_t) in &items {
+    let mut occupied: Vec<(UVec2, UVec2)> = contains
+        .map(|contains| {
+            contains
+                .iter()
+                .filter_map(|held| layouts.get(held).ok())
+                .filter(|(state, ..)| state.is_stored())
+                .map(|(_, packed, footprint)| (packed.origin(), footprint.0))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for (item_e, state, item_t, footprint, packed) in &items {
         if !state.is_on_ground() {
             continue;
         }
         let dist = (player_t.translation - item_t.translation)
             .with_y(0.0)
             .length();
-        if dist < PICKUP_RANGE {
-            commands.entity(item_e).store_in(player_e);
+        if dist >= PICKUP_RANGE {
+            continue;
         }
+        if let Some(grid) = grid {
+            let preferred = packed.map(PackedAt::origin);
+            let Some(slot) = find_free_slot(grid.size(), &occupied, footprint.0, preferred) else {
+                continue;
+            };
+            occupied.push((slot, footprint.0));
+        }
+        commands.entity(item_e).store_in(player_e);
     }
 }
 
-/// `Q` equips the first stowed item. `equip_to`'s policy stows whatever was
-/// in the hand, so repeated presses cycle through the bag.
+fn toggle_inventory(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut open: ResMut<InventoryOpen>,
+    player: Query<&InventoryUi, With<Player>>,
+    mut panels: Query<&mut Visibility, With<InventoryUiOf>>,
+    mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    mut locked: ResMut<CursorLocked>,
+) {
+    let tab = keys.just_pressed(KeyCode::Tab);
+    let escape = keys.just_pressed(KeyCode::Escape) && open.0;
+    if !tab && !escape {
+        return;
+    }
+    open.0 = !open.0;
+    if let Ok(Some(panel)) = player.single().map(InventoryUi::entity)
+        && let Ok(mut visibility) = panels.get_mut(panel)
+    {
+        *visibility = if open.0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut cursor) = cursors.single_mut() {
+        set_cursor_lock(&mut cursor, &mut locked, !open.0 && tab);
+    }
+}
+
 fn equip_from_bag(
     keys: Res<ButtonInput<KeyCode>>,
     player: Query<(Entity, Option<&Contains>), With<Player>>,
@@ -197,7 +259,6 @@ fn equip_from_bag(
     }
 }
 
-/// `G` drops the equipped item in front of the player.
 fn drop_equipped(
     keys: Res<ButtonInput<KeyCode>>,
     player: Query<(&Transform, Option<&Contains>), With<Player>>,
@@ -220,10 +281,6 @@ fn drop_equipped(
     }
 }
 
-/// Shows the split live: model lines keep their entity ids and grow
-/// components across transitions, view lines change entity per transition,
-/// and the carrying line demonstrates the O(1) reverse query through
-/// `Contains`.
 type HudTexts<'w, 's> =
     Query<'w, 's, (&'static mut Text, &'static HudLine), (Without<Item>, Without<ViewOf>)>;
 
@@ -289,8 +346,6 @@ fn update_hud(
         .collect();
     view_lines.sort();
 
-    // The same renderer serves both inspection routes: the crosshair target
-    // (view raycast -> model) and the inventory (Contains -> model).
     let target_line = match target.0.and_then(|model| models.get(model).ok()) {
         Some(model) => format!(
             "target: {}",
@@ -321,7 +376,6 @@ fn update_hud(
             HudLine::Views => view_lines.join("\n"),
             HudLine::Carrying => carrying.clone(),
         };
-        // Only write on change so the UI doesn't relayout every frame.
         if text.0 != new {
             text.0 = new;
         }

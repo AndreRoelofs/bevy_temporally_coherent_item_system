@@ -6,10 +6,14 @@ use bevy::scene::ScenePatch;
 use super::{ContainedBy, Item, ItemRegistry, ItemState, ItemStateKind};
 
 mod gun;
+mod inventory_ui;
 mod rusty;
+mod tint;
 
 pub use gun::GunViewPlugin;
+pub use inventory_ui::*;
 pub use rusty::RustyViewPlugin;
+pub use tint::*;
 
 pub struct ItemViewsPlugin;
 
@@ -17,7 +21,12 @@ impl Plugin for ItemViewsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ItemRegistry>()
             .add_observer(view_on_state_change)
-            .add_plugins((GunViewPlugin, RustyViewPlugin));
+            .add_plugins((
+                ViewTintPlugin,
+                InventoryUiPlugin,
+                GunViewPlugin,
+                RustyViewPlugin,
+            ));
     }
 }
 
@@ -44,6 +53,7 @@ fn view_on_state_change(
     registry: Res<ItemRegistry>,
     children: Query<&Children>,
     sockets: Query<(), With<HandSocket>>,
+    panels: Query<&InventoryUi>,
     mut commands: Commands,
 ) {
     refresh_view(
@@ -52,6 +62,7 @@ fn view_on_state_change(
         &registry,
         &children,
         &sockets,
+        &panels,
         commands.reborrow(),
     );
 }
@@ -62,6 +73,7 @@ pub(crate) fn refresh_view(
     registry: &ItemRegistry,
     children: &Query<&Children>,
     sockets: &Query<(), With<HandSocket>>,
+    panels: &Query<&InventoryUi>,
     mut commands: Commands,
 ) {
     let Ok(model_ref) = models.get(model) else {
@@ -75,6 +87,37 @@ pub(crate) fn refresh_view(
     };
     let Some(chrome) = registry.chrome(model_ref, kind) else {
         return;
+    };
+
+    let parent = match kind {
+        ItemStateKind::OnGround => model,
+        ItemStateKind::Equipped => match model_ref.get::<ContainedBy>() {
+            Some(contained) => {
+                let holder = contained.container();
+                socket_of(holder, children, sockets).unwrap_or_else(|| {
+                    warn!("holder {holder} has no HandSocket; parenting view to its root");
+                    holder
+                })
+            }
+            None => {
+                warn!("equipped item {model} has no holder; parenting view to the model");
+                model
+            }
+        },
+        ItemStateKind::Stored => {
+            let Some(contained) = model_ref.get::<ContainedBy>() else {
+                warn!("stored item {model} has no container; skipping its view");
+                return;
+            };
+            match panels
+                .get(contained.container())
+                .ok()
+                .and_then(InventoryUi::entity)
+            {
+                Some(panel) => panel,
+                None => return,
+            }
+        }
     };
 
     let chrome = chrome.clone();
@@ -93,29 +136,9 @@ pub(crate) fn refresh_view(
             }
         });
     });
-    let mut view = commands.entity(spawned);
-    view.insert(ViewOf(model));
-
-    match kind {
-        ItemStateKind::OnGround => {
-            view.insert(ChildOf(model));
-        }
-        ItemStateKind::Equipped => {
-            if let Some(contained) = model_ref.get::<ContainedBy>() {
-                let holder = contained.container();
-                view.insert(ChildOf(
-                    socket_of(holder, children, sockets).unwrap_or_else(|| {
-                        warn!("holder {holder} has no HandSocket; parenting view to its root");
-                        holder
-                    }),
-                ));
-            } else {
-                warn!("equipped item {model} has no holder; parenting view to the model");
-                view.insert(ChildOf(model));
-            }
-        }
-        ItemStateKind::Stored => {}
-    }
+    commands
+        .entity(spawned)
+        .insert((ViewOf(model), ChildOf(parent)));
 }
 
 fn socket_of(
