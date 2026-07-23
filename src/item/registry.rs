@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy::scene::ScenePatch;
 
-use super::{Item, ItemStateKind};
+use super::{Item, ItemState};
 
 #[derive(Default)]
 pub struct ItemDefinition {
-    pub chrome: HashMap<ItemStateKind, Handle<ScenePatch>>,
+    pub chrome: HashMap<ItemState, Handle<ScenePatch>>,
 }
 
 #[derive(Resource, Default)]
@@ -21,13 +21,13 @@ impl ItemRegistry {
         self
     }
 
-    pub fn chrome(&self, model: EntityRef, kind: ItemStateKind) -> Option<&Handle<ScenePatch>> {
+    pub fn chrome(&self, model: EntityRef, state: ItemState) -> Option<&Handle<ScenePatch>> {
         let item = model.get::<Item>()?;
         let Some(definition) = self.definitions.get(&item.key.0) else {
             warn!("no item definition registered for key `{}`", item.key.0);
             return None;
         };
-        definition.chrome.get(&kind)
+        definition.chrome.get(&state)
     }
 }
 

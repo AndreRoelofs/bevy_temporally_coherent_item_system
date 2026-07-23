@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::scene::ScenePatch;
 
-use super::{ContainedBy, Item, ItemRegistry, ItemState, ItemStateKind};
+use super::{ContainedBy, Item, ItemRegistry, ItemState};
 
 mod gun;
 mod inventory_ui;
@@ -82,16 +82,16 @@ pub(crate) fn refresh_view(
 
     commands.entity(model).despawn_related::<View>();
 
-    let Some(kind) = model_ref.get::<ItemState>().map(ItemState::kind) else {
+    let Some(state) = model_ref.get::<ItemState>().copied() else {
         return;
     };
-    let Some(chrome) = registry.chrome(model_ref, kind) else {
+    let Some(chrome) = registry.chrome(model_ref, state) else {
         return;
     };
 
-    let parent = match kind {
-        ItemStateKind::OnGround => model,
-        ItemStateKind::Equipped => match model_ref.get::<ContainedBy>() {
+    let parent = match state {
+        ItemState::OnGround => model,
+        ItemState::Equipped => match model_ref.get::<ContainedBy>() {
             Some(contained) => {
                 let holder = contained.container();
                 socket_of(holder, children, sockets).unwrap_or_else(|| {
@@ -104,7 +104,7 @@ pub(crate) fn refresh_view(
                 model
             }
         },
-        ItemStateKind::Stored => {
+        ItemState::Stored => {
             let Some(contained) = model_ref.get::<ContainedBy>() else {
                 warn!("stored item {model} has no container; skipping its view");
                 return;

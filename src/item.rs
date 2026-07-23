@@ -45,40 +45,24 @@ pub struct Item {
     pub label: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ItemStateKind {
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[component(immutable)]
+pub enum ItemState {
     OnGround,
     Equipped,
     Stored,
 }
 
-#[derive(Component, Debug)]
-#[component(immutable)]
-pub struct ItemState(ItemStateKind);
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OnGround;
 
-impl ItemState {
-    pub fn kind(&self) -> ItemStateKind {
-        self.0
-    }
+/// Used by moving entities to indicate who is carrying the item such as pawns and animals.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EquippedBy(pub Entity);
 
-    pub fn is_on_ground(&self) -> bool {
-        self.0 == ItemStateKind::OnGround
-    }
-
-    pub fn is_equipped(&self) -> bool {
-        self.0 == ItemStateKind::Equipped
-    }
-
-    pub fn is_stored(&self) -> bool {
-        self.0 == ItemStateKind::Stored
-    }
-}
-
-impl PartialEq<ItemStateKind> for ItemState {
-    fn eq(&self, kind: &ItemStateKind) -> bool {
-        self.0 == *kind
-    }
-}
+/// Used by stationary entities to indicate who is carrying the item such as chests and crates.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StoredIn(pub Entity);
 
 #[derive(Component)]
 #[relationship(relationship_target = Contains)]
@@ -134,7 +118,7 @@ impl ItemTransitions for EntityCommands<'_> {
                                 held != model
                                     && world
                                         .get::<ItemState>(held)
-                                        .is_some_and(ItemState::is_equipped)
+                                        .is_some_and(|state| state == &ItemState::Equipped)
                             })
                             .collect()
                     })
@@ -143,12 +127,10 @@ impl ItemTransitions for EntityCommands<'_> {
             if item.world().get_entity(holder).is_err() {
                 return;
             }
-            item.insert((ItemState(ItemStateKind::Equipped), ContainedBy(holder)));
+            item.insert((ItemState::Equipped, ContainedBy(holder)));
             item.world_scope(|world| {
                 for held in demote {
-                    world
-                        .entity_mut(held)
-                        .insert(ItemState(ItemStateKind::Stored));
+                    world.entity_mut(held).insert(ItemState::Stored);
                 }
             });
         });
@@ -161,17 +143,14 @@ impl ItemTransitions for EntityCommands<'_> {
                 warn!("store_in: container {container} does not exist");
                 return;
             }
-            item.insert((ItemState(ItemStateKind::Stored), ContainedBy(container)));
+            item.insert((ItemState::Stored, ContainedBy(container)));
         });
         self
     }
 
     fn drop_at(&mut self, pos: Vec3) -> &mut Self {
-        self.insert((
-            ItemState(ItemStateKind::OnGround),
-            Transform::from_translation(pos),
-        ))
-        .remove::<ContainedBy>()
+        self.insert((ItemState::OnGround, Transform::from_translation(pos)))
+            .remove::<ContainedBy>()
     }
 }
 
@@ -190,7 +169,7 @@ fn ground_items_of_dying_holder(
         }
         if let Ok(mut item) = commands.get_entity(held) {
             item.insert((
-                ItemState(ItemStateKind::OnGround),
+                ItemState::OnGround,
                 Transform::from_translation(transform.translation),
             ));
         }
@@ -205,20 +184,20 @@ fn repair_on_link_lost(
     let model = removed.event().entity;
     let held = states
         .get(model)
-        .is_ok_and(|state| state.is_equipped() || state.is_stored());
+        .is_ok_and(|state| state == &ItemState::Equipped || state == &ItemState::Stored);
     if !held {
         return;
     }
     warn!("item {model} lost its container without a transition; re-grounding it in place");
     if let Ok(mut item) = commands.get_entity(model) {
-        item.try_insert(ItemState(ItemStateKind::OnGround));
+        item.try_insert(ItemState::OnGround);
     }
 }
 
 fn axis_violation(state: &ItemState, contained: Option<&ContainedBy>) -> Option<&'static str> {
-    match (state.kind(), contained) {
-        (ItemStateKind::OnGround, Some(_)) => Some("OnGround item still has a ContainedBy link"),
-        (ItemStateKind::Equipped | ItemStateKind::Stored, None) => {
+    match (state, contained) {
+        (ItemState::OnGround, Some(_)) => Some("OnGround item still has a ContainedBy link"),
+        (ItemState::Equipped | ItemState::Stored, None) => {
             Some("held item has no ContainedBy link")
         }
         _ => None,
@@ -238,25 +217,14 @@ fn check_item_invariants(items: Query<(Entity, &ItemState, Option<&ContainedBy>)
 mod tests {
     use super::*;
 
+    /// TODO: Rewrite this test
     #[test]
     fn axis_violations_are_detected() {
         let holder = Entity::from_raw_u32(1).unwrap();
-        assert!(axis_violation(&ItemState(ItemStateKind::OnGround), None).is_none());
-        assert!(
-            axis_violation(
-                &ItemState(ItemStateKind::OnGround),
-                Some(&ContainedBy(holder))
-            )
-            .is_some()
-        );
-        assert!(
-            axis_violation(
-                &ItemState(ItemStateKind::Equipped),
-                Some(&ContainedBy(holder))
-            )
-            .is_none()
-        );
-        assert!(axis_violation(&ItemState(ItemStateKind::Equipped), None).is_some());
-        assert!(axis_violation(&ItemState(ItemStateKind::Stored), None).is_some());
+        assert!(axis_violation(&ItemState::OnGround, None).is_none());
+        assert!(axis_violation(&ItemState::OnGround, Some(&ContainedBy(holder))).is_some());
+        assert!(axis_violation(&ItemState::Equipped, Some(&ContainedBy(holder))).is_none());
+        assert!(axis_violation(&ItemState::Equipped, None).is_some());
+        assert!(axis_violation(&ItemState::Stored, None).is_some());
     }
 }

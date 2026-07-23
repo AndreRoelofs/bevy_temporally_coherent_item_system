@@ -184,14 +184,14 @@ fn pickup_items(
             contains
                 .iter()
                 .filter_map(|held| layouts.get(held).ok())
-                .filter(|(state, ..)| state.is_stored())
+                .filter(|(state, ..)| state == &&ItemState::Stored)
                 .map(|(_, packed, footprint)| (packed.origin(), footprint.0))
                 .collect()
         })
         .unwrap_or_default();
 
     for (item_e, state, item_t, footprint, packed) in &items {
-        if !state.is_on_ground() {
+        if state != &ItemState::OnGround {
             continue;
         }
         let dist = (player_t.translation - item_t.translation)
@@ -251,9 +251,11 @@ fn equip_from_bag(
     let Ok((player_e, Some(contains))) = player.single() else {
         return;
     };
-    let stored = contains
-        .iter()
-        .find(|&held| states.get(held).is_ok_and(ItemState::is_stored));
+    let stored = contains.iter().find(|&held| {
+        states
+            .get(held)
+            .is_ok_and(|state| state == &ItemState::Stored)
+    });
     if let Some(item) = stored {
         commands.entity(item).equip_to(player_e);
     }
@@ -271,9 +273,11 @@ fn drop_equipped(
     let Ok((player_t, Some(contains))) = player.single() else {
         return;
     };
-    let equipped = contains
-        .iter()
-        .find(|&held| states.get(held).is_ok_and(ItemState::is_equipped));
+    let equipped = contains.iter().find(|&held| {
+        states
+            .get(held)
+            .is_ok_and(|state| state == &ItemState::Equipped)
+    });
     if let Some(item) = equipped {
         let forward = player_t.forward().with_y(0.0).normalize_or_zero();
         let pos = (player_t.translation + forward * DROP_DISTANCE).with_y(PLATFORM_TOP_Y);
@@ -314,7 +318,7 @@ fn update_hud(
     let mut model_lines: Vec<String> = models
         .iter()
         .map(|model| {
-            let state = model.get::<ItemState>().map(ItemState::kind);
+            let state = model.get::<ItemState>().copied();
             format!(
                 "{} {} {:?} [{}]",
                 label_of(model),

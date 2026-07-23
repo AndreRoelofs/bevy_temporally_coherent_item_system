@@ -87,7 +87,7 @@ fn fire_equipped(
         let Ok((gun, state, firearm, modifiers, mut ammo, last_shot)) = guns.get_mut(held) else {
             continue;
         };
-        if !state.is_equipped() {
+        if state != &ItemState::Equipped {
             continue;
         }
         let cooldown = firearm.cooldown.effective(modifiers);

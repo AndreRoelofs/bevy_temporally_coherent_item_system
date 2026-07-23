@@ -57,7 +57,8 @@ Now we have a problem already. An item can receive `Rusty` only if it's `OnGroun
 If the item is `Rusty`, it also needs to convey that information to the player visually. In all 3 states, a `Rusty` item gets a brown tint. Brand new items just have a white texture. `Entity` persistence is something that we receive for free in ECS systems. OOP systems like Unreal Engine and Unity can solve the persistence issue to some degree by using a unified representation and adding key-value pairs to that representation in order to save data between state transitions.
 
 ## Model/View split
-Every item is just an instance of `Entity` at the end of the day. With the `Rusty` component being in play, we already want to split the representation of an item from how this item behaves in different states
+
+Every item is just an instance of `Entity` at the end of the day. With the `Rusty` component being in play, we already want to split the representation of an item from how this item behaves in different states.
 
 
 

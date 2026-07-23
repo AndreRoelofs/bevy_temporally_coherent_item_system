@@ -119,7 +119,7 @@ pub(crate) fn occupied_cells(
         .iter()
         .filter(|&held| held != except)
         .filter_map(|held| stored.get(held).ok())
-        .filter(|(state, ..)| state.is_stored())
+        .filter(|(state, ..)| state == &&ItemState::Stored)
         .map(|(_, packed, footprint)| (packed.origin(), footprint.0))
         .collect();
     Some((grid.size(), occupied))
@@ -134,7 +134,7 @@ fn occupied_cells_world(
         .query_filtered::<(Entity, &ItemState, &ContainedBy, &PackedAt, &ItemFootprint), With<Item>>()
         .iter(world)
         .filter(|&(held, state, contained, ..)| {
-            held != except && state.is_stored() && contained.container() == container
+            held != except && state == &ItemState::Stored && contained.container() == container
         })
         .map(|(_, _, _, packed, footprint)| (packed.origin(), footprint.0))
         .collect()
@@ -146,7 +146,10 @@ fn pack_on_store(
     mut commands: Commands,
 ) {
     let model = insert.event().entity;
-    if !states.get(model).is_ok_and(ItemState::is_stored) {
+    if !states
+        .get(model)
+        .is_ok_and(|state| state == &ItemState::Stored)
+    {
         return;
     }
     commands.queue(move |world: &mut World| pack_into_grid(world, model));
@@ -158,7 +161,7 @@ fn pack_into_grid(world: &mut World, model: Entity) {
     };
     if !model_ref
         .get::<ItemState>()
-        .is_some_and(ItemState::is_stored)
+        .is_some_and(|state| state == &ItemState::Stored)
     {
         return;
     }
@@ -203,7 +206,10 @@ impl ItemPacking for EntityCommands<'_> {
     fn repack_at(&mut self, origin: UVec2) -> &mut Self {
         self.queue(move |mut item: EntityWorldMut| {
             let model = item.id();
-            if !item.get::<ItemState>().is_some_and(ItemState::is_stored) {
+            if !item
+                .get::<ItemState>()
+                .is_some_and(|state| state == &ItemState::Stored)
+            {
                 warn!("repack_at: item {model} is not stored");
                 return;
             }
@@ -244,7 +250,7 @@ fn check_packing_invariants(
             let Ok((state, packed, footprint)) = items.get(held) else {
                 continue;
             };
-            if !state.is_stored() {
+            if state != &ItemState::Stored {
                 continue;
             }
             let Some(packed) = packed else {

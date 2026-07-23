@@ -12,8 +12,8 @@ use bevy::transform::TransformPlugin;
 use bevy_temporally_coherent_item_system::{
     Ammo, CELL_PX, Contains, Cooldown, CooldownModifiers, CursorLocked, FireOutcome, Firearm,
     GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryUi, Item, ItemFootprint,
-    ItemKey, ItemPacking, ItemPlugin, ItemState, ItemStateKind, ItemTransitions, LastShotAt,
-    PackedAt, Player, Rusty, StatModifierCommands, StatOp, View, ViewOf, inspect_lines, try_fire,
+    ItemKey, ItemPacking, ItemPlugin, ItemState, ItemTransitions, LastShotAt, PackedAt, Player,
+    Rusty, StatModifierCommands, StatOp, View, ViewOf, inspect_lines, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -72,8 +72,8 @@ fn view_entity(app: &App, model: Entity) -> Option<Entity> {
     app.world().get::<View>(model).and_then(View::entity)
 }
 
-fn kind(app: &App, model: Entity) -> Option<ItemStateKind> {
-    app.world().get::<ItemState>(model).map(ItemState::kind)
+fn state(app: &App, model: Entity) -> Option<ItemState> {
+    app.world().get::<ItemState>(model).copied()
 }
 
 fn view_spawns(app: &App) -> usize {
@@ -122,7 +122,7 @@ fn model_components_persist_and_views_swap() {
     with_commands(&mut app, |commands| {
         commands.entity(model).equip_to(holder);
     });
-    assert_eq!(kind(&app, model), Some(ItemStateKind::Equipped));
+    assert_eq!(state(&app, model), Some(ItemState::Equipped));
     assert!(app.world().get::<Rusty>(model).is_some());
     assert!(app.world().get::<Engraved>(model).is_some());
 
@@ -138,7 +138,7 @@ fn model_components_persist_and_views_swap() {
     with_commands(&mut app, |commands| {
         commands.entity(model).drop_at(drop_pos);
     });
-    assert_eq!(kind(&app, model), Some(ItemStateKind::OnGround));
+    assert_eq!(state(&app, model), Some(ItemState::OnGround));
     assert!(app.world().get::<ContainedBy>(model).is_none());
     assert_eq!(
         app.world().get::<Transform>(model).map(|t| t.translation),
@@ -150,7 +150,7 @@ fn model_components_persist_and_views_swap() {
     with_commands(&mut app, |commands| {
         commands.entity(model).store_in(holder);
     });
-    assert_eq!(kind(&app, model), Some(ItemStateKind::Stored));
+    assert_eq!(state(&app, model), Some(ItemState::Stored));
     assert!(
         view_entity(&app, model).is_none(),
         "stored items have no view"
@@ -180,7 +180,7 @@ fn unknown_key_leaves_model_intact() {
 
     assert!(view_entity(&app, model).is_none());
     assert!(app.world().get::<Item>(model).is_some());
-    assert_eq!(kind(&app, model), Some(ItemStateKind::OnGround));
+    assert_eq!(state(&app, model), Some(ItemState::OnGround));
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn view_refresh_is_exact() {
         3,
         "dropping builds exactly one view — the link removal must not double-refresh"
     );
-    assert_eq!(kind(&app, model), Some(ItemStateKind::OnGround));
+    assert_eq!(state(&app, model), Some(ItemState::OnGround));
 }
 
 #[test]
@@ -237,8 +237,8 @@ fn carry_both_and_reverse_query() {
         commands.entity(sword).equip_to(player);
     });
 
-    assert_eq!(kind(&app, sword), Some(ItemStateKind::Equipped));
-    assert_eq!(kind(&app, gun), Some(ItemStateKind::Stored));
+    assert_eq!(state(&app, sword), Some(ItemState::Equipped));
+    assert_eq!(state(&app, gun), Some(ItemState::Stored));
 
     // The O(1) reverse query: everything the player carries, one lookup.
     let carried: Vec<Entity> = app
@@ -266,11 +266,11 @@ fn single_equipped_policy_demotes_previous_weapon() {
     });
 
     assert_eq!(
-        kind(&app, first),
-        Some(ItemStateKind::Stored),
+        state(&app, first),
+        Some(ItemState::Stored),
         "equipping a second weapon stows the first"
     );
-    assert_eq!(kind(&app, second), Some(ItemStateKind::Equipped));
+    assert_eq!(state(&app, second), Some(ItemState::Equipped));
     assert_eq!(
         app.world().get::<Contains>(player).map(Contains::len),
         Some(2)
@@ -299,8 +299,8 @@ fn holder_death_drops_entire_inventory() {
 
     for model in [sword, gun] {
         assert_eq!(
-            kind(&app, model),
-            Some(ItemStateKind::OnGround),
+            state(&app, model),
+            Some(ItemState::OnGround),
             "everything the holder carried drops, equipped and stowed alike"
         );
         assert!(app.world().get::<ContainedBy>(model).is_none());
@@ -334,7 +334,7 @@ fn cross_container_move_updates_both_sides() {
         commands.entity(model).equip_to(player);
     });
 
-    assert_eq!(kind(&app, model), Some(ItemStateKind::Equipped));
+    assert_eq!(state(&app, model), Some(ItemState::Equipped));
     assert!(
         app.world().get::<Contains>(chest).is_none(),
         "the chest's side of the relationship empties automatically"
@@ -784,10 +784,10 @@ fn a_full_bag_refuses_the_item_and_regrounds_it() {
         commands.entity(second).store_in(holder);
     });
 
-    assert_eq!(kind(&app, first), Some(ItemStateKind::Stored));
+    assert_eq!(state(&app, first), Some(ItemState::Stored));
     assert_eq!(
-        kind(&app, second),
-        Some(ItemStateKind::OnGround),
+        state(&app, second),
+        Some(ItemState::OnGround),
         "no room — the repair net re-grounds the item instead of leaving it spotless"
     );
     assert_eq!(
@@ -956,12 +956,12 @@ fn equip_swap_repacks_the_demoted_weapon() {
     });
 
     assert_eq!(
-        kind(&app, rifle),
-        Some(ItemStateKind::Stored),
+        state(&app, rifle),
+        Some(ItemState::Stored),
         "the demoted rifle fits back in because the pistol left the grid first"
     );
     assert_eq!(packed_origin(&app, rifle), Some(UVec2::ZERO));
-    assert_eq!(kind(&app, pistol), Some(ItemStateKind::Equipped));
+    assert_eq!(state(&app, pistol), Some(ItemState::Equipped));
 }
 
 #[test]
@@ -979,7 +979,7 @@ fn raw_link_removal_is_repaired() {
         commands.entity(model).remove::<ContainedBy>();
     });
 
-    assert_eq!(kind(&app, model), Some(ItemStateKind::OnGround));
+    assert_eq!(state(&app, model), Some(ItemState::OnGround));
     let view = view_entity(&app, model).expect("repaired item has a ground view");
     assert_eq!(
         app.world().get::<ChildOf>(view).map(ChildOf::parent),

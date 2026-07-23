@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use crate::{ItemDefinition, ItemIcon, ItemRegistry, ItemStateKind, build_chrome_patch};
+use crate::{ItemDefinition, ItemIcon, ItemRegistry, ItemState, build_chrome_patch};
 
 const GUN_COLOR: Color = Color::srgb(0.8, 0.8, 0.85);
 const ICON_COLOR: Color = Color::WHITE;
@@ -59,9 +59,9 @@ impl Plugin for GunViewPlugin {
             "core::item::gun",
             ItemDefinition {
                 chrome: HashMap::from([
-                    (ItemStateKind::OnGround, ground),
-                    (ItemStateKind::Equipped, equipped),
-                    (ItemStateKind::Stored, stored),
+                    (ItemState::OnGround, ground),
+                    (ItemState::Equipped, equipped),
+                    (ItemState::Stored, stored),
                 ]),
             },
         );

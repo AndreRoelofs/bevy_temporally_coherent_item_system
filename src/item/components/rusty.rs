@@ -52,7 +52,7 @@ fn rust_grounded_items(
     mut commands: Commands,
 ) {
     for (item_e, state, mut grounded) in &mut items {
-        if !state.is_on_ground() {
+        if state != &ItemState::OnGround {
             continue;
         }
         grounded.0 += time.delta_secs();

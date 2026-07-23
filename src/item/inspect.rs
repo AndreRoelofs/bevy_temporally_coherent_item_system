@@ -24,7 +24,7 @@ pub fn inspect_lines(model: EntityRef, contributors: &InspectContributors) -> Ve
     let mut lines = Vec::new();
 
     let label = model.get::<Item>().map_or("?", |item| item.label.as_str());
-    let state = model.get::<ItemState>().map(ItemState::kind);
+    let state = model.get::<ItemState>().copied();
     lines.push(format!("{label} — {state:?}"));
 
     if let Some(firearm) = model.get::<Firearm>() {
