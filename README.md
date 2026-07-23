@@ -2,6 +2,67 @@
 
 # The following explanation is still WIP
 
+## Purpose
+This project is loosely inspired by the way Unreal Engine Lyra project handles the items and mutates their state between being on the ground, in inventory or equipped by the player and how a similar system of fragments can be implemented better in Bevy ECS. Below is a breakdown of how this project works and motivations for the design decisions that I made.
+
+## The MVP
+The purpose of this project is to create a reusable item system that can be integrated into any type of game. The game you will find here is a simple 3D First Person Shooter. The benefits of the proposed item system are expressed via the `Rusty` component that degrades a gun's performance if the gun has been laying on the ground for a total of 5 seconds.
+
+The two most important components are
+
+```rust
+#[derive(Component, Default)]
+pub struct GroundedSecs(pub f32); // stores the number of seconds an entity spent on the ground
+
+#[derive(Component, Clone, Default)]
+pub struct Rusty;
+```
+
+The application of `Rusty` is handled by a simple function you can find below:
+
+```rust
+// ... app.add_systems(Update, rust_grounded_items); ...
+
+fn rust_grounded_items(
+    time: Res<Time>,
+    // Make sure we never insert Rusty twice by querying only the items that don't have Rusty
+    mut items: Query<(Entity, &mut GroundedSecs), Without<Rusty>>,
+    mut commands: Commands,
+) {
+    for (item, mut grounded) in &mut items {
+        grounded.0 += time.delta_secs();
+        if grounded.0 >= 5.0 {
+            commands.entity(item).insert(Rusty);
+        }
+    }
+}
+```
+
+Now that we have the basics out the way, let's see what else this architecture has to offer.
+
+## States of an item
+
+Every item exists in one of the following 3 states
+
+```rust
+pub enum ItemStateKind {
+    OnGround,
+    Equipped,
+    Stored,
+}
+```
+
+Now we have a problem already. An item can receive `Rusty` only if it's `OnGround`. But it's performance can only be degraded if it's `Equipped`. We need to have some kind of way to preserve the components between the items states. For the purposes of this demo a gun is displayed as a 3D rectangle when on the ground, as a 2D image when in player's inventory and a 3D sphere when in hand, mimicking potentially different meshes that an item might have in all 3 different states.
+
+If the item is `Rusty`, it also needs to convey that information to the player visually. In all 3 states, a `Rusty` item gets a brown tint. Brand new items just have a white texture. `Entity` persistence is something that we receive for free in ECS systems. OOP systems like Unreal Engine and Unity can solve the persistence issue to some degree by using a unified representation and adding key-value pairs to that representation in order to save data between state transitions.
+
+## Model/View split
+Every item is just an instance of `Entity` at the end of the day. With the `Rusty` component being in play, we already want to split the representation of an item from how this item behaves in different states
+
+
+
+# Old Explanation
+
 ## Problem
 
 Let's say you want to have a gun in your game that can lay on the ground, be equipped by the player or exist in a player's inventory. In a naive implementation of the item system in classical engines like Unreal Engine and Unity, you will model the item as 3 separate objects to represent the 3 separate states: an `AGunPickup` actor on the ground, an `AGunWeapon` actor in the hand, and a `UGunInventoryItem` object in the bag. When the object goes from the ground to the player's inventory, you would destroy the `AGunPickup` actor and create a `UGunInventoryItem`.
@@ -160,6 +221,71 @@ void AGunPickup::AccrueRust()
     }
 }
 ```
+
+
+Let's fire the gun and double the cooldown if the gun is `Rusty`
+
+```cpp
+void AGunWeapon::Fire()
+{
+    UItemInstance* Item = Equipment->GetInstigator();
+
+    const UFragment_GunStats* Stats = Item->FindFragmentByClass<UFragment_GunStats>();
+
+    float Cooldown = Stats->FireCooldown;
+    if (Item->GetStatTagStackCount(TAG_Rusty) > 0)
+    {
+        Cooldown *= 2.0f;
+    }
+
+    NextFireTime = GetWorld()->GetTimeSeconds() + Cooldown;
+    SpawnProjectile();
+}
+```
+
+## Advanced Bevy solution
+
+In Entity Component System an item is a persistent `Entity`. What this entity does depends completely on what `Component`s are present on it.
+
+The string-keyed tags from the advanced example above become Bevy `Component`s
+
+```rust
+#[derive(Component, Default)]
+pub struct GroundedSecs(pub f32); // stores the number of seconds an entity spent on the ground
+
+#[derive(Component, Clone, Default)]
+pub struct Rusty;
+```
+
+We can keep track of their application via the following function
+
+```rust
+// ... app.add_systems(Update, rust_grounded_items); ...
+
+fn rust_grounded_items(
+    time: Res<Time>,
+    // Make sure we never insert Rusty twice by querying only the items that don't have Rusty
+    mut items: Query<(Entity, &mut GroundedSecs), Without<Rusty>>,
+    mut commands: Commands,
+) {
+    for (item, mut grounded) in &mut items {
+        grounded.0 += time.delta_secs();
+        if grounded.0 >= 5.0 {
+            commands.entity(item).insert(Rusty);
+        }
+    }
+}
+```
+
+So far so good. We just converted the basics of the advanced example to Bevy API. Let's now replicate the process of not only firing the gun, but also increasing it's cooldown based on whether it's Rusty or not before doing so.
+
+```rust
+
+```
+
+
+
+
 
 ## OLD EXPLANATION
 
