@@ -5,41 +5,6 @@
 ## Purpose
 This project is loosely inspired by the way Unreal Engine Lyra project handles the items and mutates their state between being on the ground, in inventory or equipped by the player and how a similar system of fragments can be implemented better in Bevy ECS. Below is a breakdown of how this project works and motivations for the design decisions that I made.
 
-## The MVP
-The purpose of this project is to create a reusable item system that can be integrated into any type of game. The game you will find here is a simple 3D First Person Shooter. The benefits of the proposed item system are expressed via the `Rusty` component that degrades a gun's performance if the gun has been laying on the ground for a total of 5 seconds.
-
-The two most important components are
-
-```rust
-#[derive(Component, Default)]
-pub struct GroundedSecs(pub f32); // stores the number of seconds an entity spent on the ground
-
-#[derive(Component, Clone, Default)]
-pub struct Rusty;
-```
-
-The application of `Rusty` is handled by a simple function you can find below:
-
-```rust
-// ... app.add_systems(Update, rust_grounded_items); ...
-
-fn rust_grounded_items(
-    time: Res<Time>,
-    // Make sure we never insert Rusty twice by querying only the items that don't have Rusty
-    mut items: Query<(Entity, &mut GroundedSecs), Without<Rusty>>,
-    mut commands: Commands,
-) {
-    for (item, mut grounded) in &mut items {
-        grounded.0 += time.delta_secs();
-        if grounded.0 >= 5.0 {
-            commands.entity(item).insert(Rusty);
-        }
-    }
-}
-```
-
-Now that we have the basics out the way, let's see what else this architecture has to offer.
-
 ## States of an item
 
 Every item exists in one of the following 3 states
@@ -75,6 +40,42 @@ fn force_item_state_invariants<S: ItemStateMarker>(
 #[derive(Resource)]
 struct ItemStateMarkers(Vec<...>);
 ```
+
+
+## The MVP
+The purpose of this project is to create a reusable item system that can be integrated into any type of game. The game you will find here is a simple 3D First Person Shooter. The benefits of the proposed item system are expressed via the `Rusty` component that degrades a gun's performance if the gun has been laying on the ground for a total of 5 seconds.
+
+The two most important components are
+
+```rust
+#[derive(Component, Default)]
+pub struct GroundedSecs(pub f32); // stores the number of seconds an entity spent on the ground
+
+#[derive(Component, Clone, Default)]
+pub struct Rusty;
+```
+
+The application of `Rusty` is handled by a simple function you can find below:
+
+```rust
+// ... app.add_systems(Update, rust_grounded_items); ...
+
+fn rust_grounded_items(
+    time: Res<Time>,
+    // Make sure we never insert Rusty twice by querying only the items that don't have Rusty
+    mut items: Query<(Entity, &mut GroundedSecs), Without<Rusty>>,
+    mut commands: Commands,
+) {
+    for (item, mut grounded) in &mut items {
+        grounded.0 += time.delta_secs();
+        if grounded.0 >= 5.0 {
+            commands.entity(item).insert(Rusty);
+        }
+    }
+}
+```
+
+Now that we have the basics out the way, let's see what else this architecture has to offer.
 
 
 
