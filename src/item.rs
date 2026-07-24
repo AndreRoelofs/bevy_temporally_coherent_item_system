@@ -22,7 +22,14 @@ impl Plugin for ItemPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LookTarget>()
             .init_resource::<InspectContributors>()
-            .add_plugins((ItemComponentsPlugin, InventoryPlugin, ItemViewsPlugin))
+            .add_plugins((ItemComponentsPlugin, InventoryPlugin, ItemViewsPlugin));
+        // The exclusion observers must be registered before the demotion
+        // observer: a demoted item repacks against the other items' states,
+        // which must be settled by then.
+        register_item_state::<OnGround>(app);
+        register_item_state::<EquippedBy>(app);
+        register_item_state::<StoredIn>(app);
+        app.add_observer(state::demote_other_equipped)
             .add_observer(state::ground_items_of_dying_holder)
             .add_systems(Update, inspect::look_at_target);
         #[cfg(debug_assertions)]
@@ -46,8 +53,8 @@ pub struct Item {
     pub label: String,
 }
 
-fn axis_violation(on_ground: bool, equipped: bool, stored: bool) -> Option<&'static str> {
-    match usize::from(on_ground) + usize::from(equipped) + usize::from(stored) {
+fn axis_violation(marker_count: usize) -> Option<&'static str> {
+    match marker_count {
         0 => Some("item has no state marker"),
         1 => None,
         _ => Some("item has more than one state marker"),
@@ -55,13 +62,10 @@ fn axis_violation(on_ground: bool, equipped: bool, stored: bool) -> Option<&'sta
 }
 
 #[cfg(debug_assertions)]
-#[expect(clippy::type_complexity)]
-fn check_item_invariants(
-    items: Query<(Entity, Has<OnGround>, Has<EquippedBy>, Has<StoredIn>), With<Item>>,
-) {
-    for (entity, on_ground, equipped, stored) in &items {
-        if let Some(violation) = axis_violation(on_ground, equipped, stored) {
-            error!("item axis invariant broken on {entity}: {violation}");
+fn check_item_invariants(items: Query<EntityRef, With<Item>>, markers: Res<ItemStateMarkers>) {
+    for model in &items {
+        if let Some(violation) = axis_violation(markers.count_on(model)) {
+            error!("item axis invariant broken on {}: {violation}", model.id());
         }
     }
 }
@@ -72,12 +76,9 @@ mod tests {
 
     #[test]
     fn axis_violations_are_detected() {
-        assert!(axis_violation(true, false, false).is_none());
-        assert!(axis_violation(false, true, false).is_none());
-        assert!(axis_violation(false, false, true).is_none());
-        assert!(axis_violation(false, false, false).is_some());
-        assert!(axis_violation(true, true, false).is_some());
-        assert!(axis_violation(false, true, true).is_some());
-        assert!(axis_violation(true, true, true).is_some());
+        assert!(axis_violation(1).is_none());
+        assert!(axis_violation(0).is_some());
+        assert!(axis_violation(2).is_some());
+        assert!(axis_violation(3).is_some());
     }
 }

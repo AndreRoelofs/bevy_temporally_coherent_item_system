@@ -3,10 +3,10 @@
 //! mutually exclusive, and holders can carry equipped and stowed items at
 //! once.
 //!
-//! Every transition below goes through the `ItemTransitions` trait — the
-//! same door the game uses, and the only sanctioned one: touching the
-//! state markers directly is a contract violation the debug invariant
-//! check reports.
+//! State changes below are plain marker inserts — the same door the game
+//! and third-party states use; the registered exclusion observers clear
+//! the previous marker. Removing a marker directly is a contract violation
+//! the debug invariant check reports.
 
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
@@ -14,9 +14,9 @@ use bevy::transform::TransformPlugin;
 use bevy_temporally_coherent_item_system::{
     Ammo, CELL_PX, Cooldown, CooldownModifiers, CursorLocked, EquippedBy, Equips, FireOutcome,
     Firearm, GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryUi, Item,
-    ItemFootprint, ItemKey, ItemPacking, ItemPlugin, ItemState, ItemTransitions, LastShotAt,
-    PackedAt, Player, Rusty, StatModifierCommands, StatOp, StoredIn, Stores, View, ViewOf,
-    inspect_lines, try_fire,
+    ItemFootprint, ItemKey, ItemPacking, ItemPlugin, ItemStateMarker, ItemStateMarkers, LastShotAt,
+    OnGround, PackedAt, Player, Rusty, StatModifierCommands, StatOp, StateKey, StoredIn, Stores,
+    View, ViewOf, inspect_lines, on_ground_at, register_item_state, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -65,7 +65,7 @@ fn spawn_gun(app: &mut App, label: &str, pos: Vec3) -> Entity {
                 GroundedSecs::default(),
                 Visibility::default(),
             ))
-            .drop_at(pos)
+            .insert(on_ground_at(pos))
             .id();
     });
     model
@@ -75,8 +75,11 @@ fn view_entity(app: &App, model: Entity) -> Option<Entity> {
     app.world().get::<View>(model).and_then(View::entity)
 }
 
-fn state(app: &App, model: Entity) -> Option<ItemState> {
-    ItemState::of(app.world().entity(model))
+fn state(app: &App, model: Entity) -> Option<StateKey> {
+    let world = app.world();
+    world
+        .resource::<ItemStateMarkers>()
+        .key_of(world.entity(model))
 }
 
 fn view_spawns(app: &App) -> usize {
@@ -123,9 +126,9 @@ fn model_components_persist_and_views_swap() {
     app.update();
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(holder);
+        commands.entity(model).insert(EquippedBy(holder));
     });
-    assert_eq!(state(&app, model), Some(ItemState::Equipped));
+    assert_eq!(state(&app, model), Some(EquippedBy::KEY));
     assert!(app.world().get::<Rusty>(model).is_some());
     assert!(app.world().get::<Engraved>(model).is_some());
 
@@ -139,9 +142,9 @@ fn model_components_persist_and_views_swap() {
 
     let drop_pos = Vec3::new(1.0, 0.0, 2.0);
     with_commands(&mut app, |commands| {
-        commands.entity(model).drop_at(drop_pos);
+        commands.entity(model).insert(on_ground_at(drop_pos));
     });
-    assert_eq!(state(&app, model), Some(ItemState::OnGround));
+    assert_eq!(state(&app, model), Some(OnGround::KEY));
     assert!(app.world().get::<EquippedBy>(model).is_none());
     assert!(app.world().get::<StoredIn>(model).is_none());
     assert_eq!(
@@ -152,9 +155,9 @@ fn model_components_persist_and_views_swap() {
     assert!(app.world().get::<Engraved>(model).is_some());
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(holder);
+        commands.entity(model).insert(StoredIn(holder));
     });
-    assert_eq!(state(&app, model), Some(ItemState::Stored));
+    assert_eq!(state(&app, model), Some(StoredIn::KEY));
     assert!(
         view_entity(&app, model).is_none(),
         "stored items have no view"
@@ -176,13 +179,13 @@ fn unknown_key_leaves_model_intact() {
                 },
                 Visibility::default(),
             ))
-            .drop_at(Vec3::ZERO)
+            .insert(on_ground_at(Vec3::ZERO))
             .id();
     });
 
     assert!(view_entity(&app, model).is_none());
     assert!(app.world().get::<Item>(model).is_some());
-    assert_eq!(state(&app, model), Some(ItemState::OnGround));
+    assert_eq!(state(&app, model), Some(OnGround::KEY));
 }
 
 #[test]
@@ -207,24 +210,24 @@ fn view_refresh_is_exact() {
     assert_eq!(view_spawns(&app), 1, "spawn-by-drop builds one view");
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(holder);
+        commands.entity(model).insert(StoredIn(holder));
     });
     assert_eq!(view_spawns(&app), 1, "storing spawns no view");
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(holder);
+        commands.entity(model).insert(EquippedBy(holder));
     });
     assert_eq!(view_spawns(&app), 2, "equipping builds exactly one view");
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).drop_at(Vec3::X);
+        commands.entity(model).insert(on_ground_at(Vec3::X));
     });
     assert_eq!(
         view_spawns(&app),
         3,
         "dropping builds exactly one view — the link removal must not double-refresh"
     );
-    assert_eq!(state(&app, model), Some(ItemState::OnGround));
+    assert_eq!(state(&app, model), Some(OnGround::KEY));
 }
 
 #[test]
@@ -235,12 +238,12 @@ fn carry_both_and_reverse_query() {
     let gun = spawn_gun(&mut app, "Gun", Vec3::X);
 
     with_commands(&mut app, |commands| {
-        commands.entity(gun).store_in(player);
-        commands.entity(sword).equip_to(player);
+        commands.entity(gun).insert(StoredIn(player));
+        commands.entity(sword).insert(EquippedBy(player));
     });
 
-    assert_eq!(state(&app, sword), Some(ItemState::Equipped));
-    assert_eq!(state(&app, gun), Some(ItemState::Stored));
+    assert_eq!(state(&app, sword), Some(EquippedBy::KEY));
+    assert_eq!(state(&app, gun), Some(StoredIn::KEY));
 
     // The O(1) reverse queries: one lookup per carrying axis, and the axis
     // split answers "what is wielded" without filtering.
@@ -268,18 +271,18 @@ fn single_equipped_policy_demotes_previous_weapon() {
     let second = spawn_gun(&mut app, "Second", Vec3::X);
 
     with_commands(&mut app, |commands| {
-        commands.entity(first).equip_to(player);
+        commands.entity(first).insert(EquippedBy(player));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(second).equip_to(player);
+        commands.entity(second).insert(EquippedBy(player));
     });
 
     assert_eq!(
         state(&app, first),
-        Some(ItemState::Stored),
+        Some(StoredIn::KEY),
         "equipping a second weapon stows the first"
     );
-    assert_eq!(state(&app, second), Some(ItemState::Equipped));
+    assert_eq!(state(&app, second), Some(EquippedBy::KEY));
     assert_eq!(app.world().get::<Equips>(player).map(Equips::len), Some(1));
     assert_eq!(app.world().get::<Stores>(player).map(Stores::len), Some(1));
 }
@@ -297,8 +300,8 @@ fn holder_death_drops_entire_inventory() {
 
     app.world_mut().entity_mut(sword).insert(Rusty);
     with_commands(&mut app, |commands| {
-        commands.entity(sword).equip_to(player);
-        commands.entity(gun).store_in(player);
+        commands.entity(sword).insert(EquippedBy(player));
+        commands.entity(gun).insert(StoredIn(player));
     });
 
     app.world_mut().entity_mut(player).despawn();
@@ -307,7 +310,7 @@ fn holder_death_drops_entire_inventory() {
     for model in [sword, gun] {
         assert_eq!(
             state(&app, model),
-            Some(ItemState::OnGround),
+            Some(OnGround::KEY),
             "everything the holder carried drops, equipped and stowed alike"
         );
         assert!(app.world().get::<EquippedBy>(model).is_none());
@@ -334,15 +337,15 @@ fn cross_container_move_updates_both_sides() {
     let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(chest);
+        commands.entity(model).insert(StoredIn(chest));
     });
     let spawns_before = view_spawns(&app);
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(player);
+        commands.entity(model).insert(EquippedBy(player));
     });
 
-    assert_eq!(state(&app, model), Some(ItemState::Equipped));
+    assert_eq!(state(&app, model), Some(EquippedBy::KEY));
     assert!(
         app.world().get::<Stores>(chest).is_none(),
         "the chest's side of the relationship empties automatically"
@@ -361,7 +364,7 @@ fn model_despawn_while_contained_does_not_panic() {
     let player = app.world_mut().spawn(Transform::default()).id();
     let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(player);
+        commands.entity(model).insert(EquippedBy(player));
     });
     let view = view_entity(&app, model).expect("view exists");
 
@@ -432,7 +435,7 @@ fn rust_recolors_the_view_in_place() {
     // A rebuilt view (state transition) comes out rusty as well.
     let holder = app.world_mut().spawn(Transform::default()).id();
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(holder);
+        commands.entity(model).insert(EquippedBy(holder));
     });
     let hand_view = view_entity(&app, model).expect("hand view exists");
     assert_eq!(
@@ -569,7 +572,7 @@ fn fired_ammo_persists_across_transitions() {
         .id();
     let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(player);
+        commands.entity(model).insert(EquippedBy(player));
     });
 
     app.world_mut()
@@ -587,13 +590,13 @@ fn fired_ammo_persists_across_transitions() {
 
     // The thesis: the spent round survives the full round trip.
     with_commands(&mut app, |commands| {
-        commands.entity(model).drop_at(Vec3::X);
+        commands.entity(model).insert(on_ground_at(Vec3::X));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(player);
+        commands.entity(model).insert(StoredIn(player));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(player);
+        commands.entity(model).insert(EquippedBy(player));
     });
     assert_eq!(app.world().get::<Ammo>(model).map(|ammo| ammo.0), Some(7));
 }
@@ -611,10 +614,10 @@ fn chrome_handles_are_reused_across_rebuilds() {
 
     for _ in 0..3 {
         with_commands(&mut app, |commands| {
-            commands.entity(model).equip_to(holder);
+            commands.entity(model).insert(EquippedBy(holder));
         });
         with_commands(&mut app, |commands| {
-            commands.entity(model).drop_at(Vec3::X);
+            commands.entity(model).insert(on_ground_at(Vec3::X));
         });
     }
     assert_eq!(
@@ -645,7 +648,7 @@ fn equipped_view_parents_to_the_hand_socket() {
     let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(holder);
+        commands.entity(model).insert(EquippedBy(holder));
     });
     let view = view_entity(&app, model).expect("equipped view exists");
     assert_eq!(
@@ -669,7 +672,11 @@ fn inspection_routes_agree_and_show_the_fold() {
     assert_eq!(via_view, model, "both routes reach the same entity");
 
     let world = app.world();
-    let lines = inspect_lines(world.entity(model), world.resource::<InspectContributors>());
+    let lines = inspect_lines(
+        world.entity(model),
+        world.resource::<InspectContributors>(),
+        world.resource::<ItemStateMarkers>(),
+    );
     assert!(
         lines.iter().any(|line| line.contains("ammo 8/8")),
         "{lines:?}"
@@ -728,8 +735,8 @@ fn stored_items_pack_into_the_grid_with_icons() {
     let rifle = spawn_sized_gun(&mut app, "Rifle", Vec3::X, UVec2::new(8, 4));
 
     with_commands(&mut app, |commands| {
-        commands.entity(pistol).store_in(holder);
-        commands.entity(rifle).store_in(holder);
+        commands.entity(pistol).insert(StoredIn(holder));
+        commands.entity(rifle).insert(StoredIn(holder));
     });
 
     assert_eq!(packed_origin(&app, pistol), Some(UVec2::ZERO));
@@ -785,14 +792,14 @@ fn a_full_bag_refuses_the_item_and_regrounds_it() {
     let second = spawn_sized_gun(&mut app, "Second", Vec3::X, UVec2::new(4, 4));
 
     with_commands(&mut app, |commands| {
-        commands.entity(first).store_in(holder);
-        commands.entity(second).store_in(holder);
+        commands.entity(first).insert(StoredIn(holder));
+        commands.entity(second).insert(StoredIn(holder));
     });
 
-    assert_eq!(state(&app, first), Some(ItemState::Stored));
+    assert_eq!(state(&app, first), Some(StoredIn::KEY));
     assert_eq!(
         state(&app, second),
-        Some(ItemState::OnGround),
+        Some(OnGround::KEY),
         "no room — the packer re-grounds the item instead of leaving it stateless"
     );
     assert_eq!(
@@ -814,7 +821,7 @@ fn rust_tints_the_icon_and_repair_restores_it() {
     let holder = spawn_bag_holder(&mut app, UVec2::new(12, 8));
     let model = spawn_sized_gun(&mut app, "Gun", Vec3::ZERO, UVec2::new(4, 4));
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(holder);
+        commands.entity(model).insert(StoredIn(holder));
     });
     let icon = view_entity(&app, model).expect("icon exists");
     assert_eq!(background_of(&app, icon), Some(Color::WHITE));
@@ -831,10 +838,10 @@ fn rust_tints_the_icon_and_repair_restores_it() {
 
     // An icon rebuilt after a round trip through the world comes out rusty.
     with_commands(&mut app, |commands| {
-        commands.entity(model).drop_at(Vec3::X);
+        commands.entity(model).insert(on_ground_at(Vec3::X));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(holder);
+        commands.entity(model).insert(StoredIn(holder));
     });
     let icon = view_entity(&app, model).expect("icon exists");
     assert_eq!(background_of(&app, icon), Some(rusted));
@@ -854,7 +861,7 @@ fn packing_memory_survives_transitions() {
     let holder = spawn_bag_holder(&mut app, UVec2::new(12, 8));
     let model = spawn_sized_gun(&mut app, "Gun", Vec3::ZERO, UVec2::new(4, 4));
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(holder);
+        commands.entity(model).insert(StoredIn(holder));
     });
     assert_eq!(packed_origin(&app, model), Some(UVec2::ZERO));
 
@@ -876,10 +883,10 @@ fn packing_memory_survives_transitions() {
     assert_eq!(node.top, Val::Px(3.0 * CELL_PX));
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(holder);
+        commands.entity(model).insert(EquippedBy(holder));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(model).drop_at(Vec3::X);
+        commands.entity(model).insert(on_ground_at(Vec3::X));
     });
     assert_eq!(
         packed_origin(&app, model),
@@ -888,12 +895,45 @@ fn packing_memory_survives_transitions() {
     );
 
     with_commands(&mut app, |commands| {
-        commands.entity(model).store_in(holder);
+        commands.entity(model).insert(StoredIn(holder));
     });
     assert_eq!(
         packed_origin(&app, model),
         Some(UVec2::new(5, 3)),
         "re-stowing returns the item to its remembered spot"
+    );
+}
+
+#[test]
+fn third_party_states_join_the_exclusion() {
+    // A state this library has never heard of: no core edits, just a
+    // marker, a key, and one registration call.
+    #[derive(Component, Clone, Copy)]
+    struct Displayed;
+    impl ItemStateMarker for Displayed {
+        const KEY: StateKey = StateKey("test::item_state::displayed");
+    }
+
+    let mut app = test_app();
+    register_item_state::<Displayed>(&mut app);
+    let player = app.world_mut().spawn(Transform::default()).id();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+
+    app.world_mut().entity_mut(model).insert(Displayed);
+    app.update();
+    assert_eq!(state(&app, model), Some(Displayed::KEY));
+    assert!(
+        app.world().get::<OnGround>(model).is_none(),
+        "the third-party state cleared the core marker"
+    );
+
+    with_commands(&mut app, |commands| {
+        commands.entity(model).insert(EquippedBy(player));
+    });
+    assert_eq!(state(&app, model), Some(EquippedBy::KEY));
+    assert!(
+        app.world().get::<Displayed>(model).is_none(),
+        "the core state cleared the third-party marker"
     );
 }
 
@@ -904,8 +944,8 @@ fn repacking_rejects_overlap_and_out_of_bounds() {
     let pistol = spawn_sized_gun(&mut app, "Pistol", Vec3::ZERO, UVec2::new(4, 4));
     let rifle = spawn_sized_gun(&mut app, "Rifle", Vec3::X, UVec2::new(8, 4));
     with_commands(&mut app, |commands| {
-        commands.entity(pistol).store_in(holder);
-        commands.entity(rifle).store_in(holder);
+        commands.entity(pistol).insert(StoredIn(holder));
+        commands.entity(rifle).insert(StoredIn(holder));
     });
     assert_eq!(packed_origin(&app, rifle), Some(UVec2::new(4, 0)));
 
@@ -948,23 +988,23 @@ fn equip_swap_repacks_the_demoted_weapon() {
     let pistol = spawn_sized_gun(&mut app, "Pistol", Vec3::X, UVec2::new(4, 4));
 
     with_commands(&mut app, |commands| {
-        commands.entity(rifle).store_in(holder);
+        commands.entity(rifle).insert(StoredIn(holder));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(rifle).equip_to(holder);
+        commands.entity(rifle).insert(EquippedBy(holder));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(pistol).store_in(holder);
+        commands.entity(pistol).insert(StoredIn(holder));
     });
     with_commands(&mut app, |commands| {
-        commands.entity(pistol).equip_to(holder);
+        commands.entity(pistol).insert(EquippedBy(holder));
     });
 
     assert_eq!(
         state(&app, rifle),
-        Some(ItemState::Stored),
+        Some(StoredIn::KEY),
         "the demoted rifle fits back in because the pistol left the grid first"
     );
     assert_eq!(packed_origin(&app, rifle), Some(UVec2::ZERO));
-    assert_eq!(state(&app, pistol), Some(ItemState::Equipped));
+    assert_eq!(state(&app, pistol), Some(EquippedBy::KEY));
 }

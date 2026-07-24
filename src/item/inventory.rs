@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::{Item, ItemTransitions, StoredIn, Stores};
+use crate::{Item, StoredIn, Stores, on_ground_at};
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ItemFootprint(pub UVec2);
@@ -181,7 +181,7 @@ fn pack_into_grid(world: &mut World, model: Entity) {
                 .get::<Transform>(container)
                 .map(|t| t.translation)
                 .unwrap_or_default();
-            world.commands().entity(model).drop_at(pos);
+            world.commands().entity(model).insert(on_ground_at(pos));
         }
     }
 }

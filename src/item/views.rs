@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::scene::ScenePatch;
 
-use super::{EquippedBy, Item, ItemRegistry, ItemState, OnGround, StoredIn};
+use super::{EquippedBy, Item, ItemRegistry, ItemStateMarker, OnGround, StateKey, StoredIn};
 
 mod gun;
 mod inventory_ui;
@@ -49,15 +49,17 @@ impl View {
     }
 }
 
-/// One observer per marker, each passing the state that fired straight to
-/// the refresh instead of re-deriving it off the entity.
+/// One observer per marker: each resolves where its state's views live and
+/// leaves the shared spawning to `spawn_chrome`. A third-party state gets a
+/// view the same way — its own observer, its own parent policy, the same
+/// helper.
 fn view_on_ground(insert: On<Insert, OnGround>, params: ViewRefreshParams, mut commands: Commands) {
-    refresh_view(
-        insert.event().entity,
-        ItemState::OnGround,
-        &params,
-        commands.reborrow(),
-    );
+    let model = insert.event().entity;
+    let Ok(model_ref) = params.models.get(model) else {
+        return;
+    };
+    commands.entity(model).despawn_related::<View>();
+    spawn_chrome(model_ref, OnGround::KEY, model, &params.registry, commands);
 }
 
 fn view_on_equip(
@@ -65,21 +67,46 @@ fn view_on_equip(
     params: ViewRefreshParams,
     mut commands: Commands,
 ) {
-    refresh_view(
-        insert.event().entity,
-        ItemState::Equipped,
-        &params,
-        commands.reborrow(),
+    let model = insert.event().entity;
+    let Ok(model_ref) = params.models.get(model) else {
+        return;
+    };
+    commands.entity(model).despawn_related::<View>();
+    let Some(equipped) = model_ref.get::<EquippedBy>() else {
+        return;
+    };
+    let holder = equipped.holder();
+    let parent = socket_of(holder, &params.children, &params.sockets).unwrap_or_else(|| {
+        warn!("holder {holder} has no HandSocket; parenting view to its root");
+        holder
+    });
+    spawn_chrome(
+        model_ref,
+        EquippedBy::KEY,
+        parent,
+        &params.registry,
+        commands,
     );
 }
 
 fn view_on_store(insert: On<Insert, StoredIn>, params: ViewRefreshParams, mut commands: Commands) {
-    refresh_view(
-        insert.event().entity,
-        ItemState::Stored,
-        &params,
-        commands.reborrow(),
-    );
+    let model = insert.event().entity;
+    let Ok(model_ref) = params.models.get(model) else {
+        return;
+    };
+    commands.entity(model).despawn_related::<View>();
+    let Some(stored) = model_ref.get::<StoredIn>() else {
+        return;
+    };
+    let Some(panel) = params
+        .panels
+        .get(stored.container())
+        .ok()
+        .and_then(InventoryUi::entity)
+    else {
+        return;
+    };
+    spawn_chrome(model_ref, StoredIn::KEY, panel, &params.registry, commands);
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -91,50 +118,17 @@ pub(crate) struct ViewRefreshParams<'w, 's> {
     panels: Query<'w, 's, &'static InventoryUi>,
 }
 
-pub(crate) fn refresh_view(
-    model: Entity,
-    state: ItemState,
-    params: &ViewRefreshParams,
+/// Spawns the chrome registered under `state_key` as a view of the model,
+/// parented to `parent`. The shared tail of every state's view observer.
+pub fn spawn_chrome(
+    model_ref: EntityRef,
+    state_key: StateKey,
+    parent: Entity,
+    registry: &ItemRegistry,
     mut commands: Commands,
 ) {
-    let Ok(model_ref) = params.models.get(model) else {
-        return;
-    };
-
-    commands.entity(model).despawn_related::<View>();
-
-    let parent = match state {
-        ItemState::OnGround => model,
-        ItemState::Equipped => match model_ref.get::<EquippedBy>() {
-            Some(equipped) => {
-                let holder = equipped.holder();
-                socket_of(holder, &params.children, &params.sockets).unwrap_or_else(|| {
-                    warn!("holder {holder} has no HandSocket; parenting view to its root");
-                    holder
-                })
-            }
-            None => {
-                warn!("equipped item {model} has no holder; parenting view to the model");
-                model
-            }
-        },
-        ItemState::Stored => {
-            let Some(stored) = model_ref.get::<StoredIn>() else {
-                warn!("stored item {model} has no container; skipping its view");
-                return;
-            };
-            match params
-                .panels
-                .get(stored.container())
-                .ok()
-                .and_then(InventoryUi::entity)
-            {
-                Some(panel) => panel,
-                None => return,
-            }
-        }
-    };
-    let Some(chrome) = params.registry.chrome(model_ref, state) else {
+    let model = model_ref.id();
+    let Some(chrome) = registry.chrome(model_ref, state_key) else {
         return;
     };
 

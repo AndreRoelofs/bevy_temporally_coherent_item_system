@@ -1,7 +1,7 @@
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
 
-use crate::{Ammo, CooldownModifiers, Firearm, Item, ItemState, Player, ViewOf};
+use crate::{Ammo, CooldownModifiers, Firearm, Item, ItemStateMarkers, Player, StateKey, ViewOf};
 
 #[derive(Resource, Default)]
 pub struct LookTarget(pub Option<Entity>);
@@ -20,12 +20,18 @@ impl InspectContributors {
     }
 }
 
-pub fn inspect_lines(model: EntityRef, contributors: &InspectContributors) -> Vec<String> {
+pub fn inspect_lines(
+    model: EntityRef,
+    contributors: &InspectContributors,
+    markers: &ItemStateMarkers,
+) -> Vec<String> {
     let mut lines = Vec::new();
 
     let label = model.get::<Item>().map_or("?", |item| item.label.as_str());
-    let state = ItemState::of(model);
-    lines.push(format!("{label} — {state:?}"));
+    let state = markers
+        .key_of(model)
+        .map_or("<stateless>", StateKey::as_str);
+    lines.push(format!("{label} — {state}"));
 
     if let Some(firearm) = model.get::<Firearm>() {
         if let Some(ammo) = model.get::<Ammo>() {

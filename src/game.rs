@@ -3,12 +3,12 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use crate::{
-    Ammo, Cooldown, CursorLocked, CursorSystems, EYE_HEIGHT, Equips, Firearm, GroundedSecs,
-    HandSocket, InspectContributors, InventoryGrid, InventoryOpen, InventoryUi, InventoryUiOf,
-    Item, ItemFootprint, ItemKey, ItemPlugin, ItemState, ItemTransitions, LookTarget, OnGround,
-    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, PackedAt, Player, Stores, View, ViewOf,
-    find_free_slot, inspect_lines, inventory_closed, look_around, set_cursor_lock, toggle_cursor,
-    update_player,
+    Ammo, Cooldown, CursorLocked, CursorSystems, EYE_HEIGHT, EquippedBy, Equips, Firearm,
+    GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryOpen, InventoryUi,
+    InventoryUiOf, Item, ItemFootprint, ItemKey, ItemPlugin, ItemStateMarkers, LookTarget,
+    OnGround, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, PackedAt, Player, StateKey,
+    StoredIn, Stores, View, ViewOf, find_free_slot, inspect_lines, inventory_closed, look_around,
+    on_ground_at, set_cursor_lock, toggle_cursor, update_player,
 };
 
 pub struct GamePlugin;
@@ -147,7 +147,7 @@ fn spawn_guns(mut commands: Commands) {
                 GroundedSecs::default(),
                 Visibility::default(),
             ))
-            .drop_at(pos);
+            .insert(on_ground_at(pos));
     }
 }
 
@@ -189,7 +189,7 @@ fn pickup_items(
             };
             occupied.push((slot, footprint.0));
         }
-        commands.entity(item_e).store_in(player_e);
+        commands.entity(item_e).insert(StoredIn(player_e));
     }
 }
 
@@ -235,7 +235,7 @@ fn equip_from_bag(
     };
     let stored = stores.iter().find(|&held| items.get(held).is_ok());
     if let Some(item) = stored {
-        commands.entity(item).equip_to(player_e);
+        commands.entity(item).insert(EquippedBy(player_e));
     }
 }
 
@@ -255,19 +255,21 @@ fn drop_equipped(
     if let Some(item) = equipped {
         let forward = player_t.forward().with_y(0.0).normalize_or_zero();
         let pos = (player_t.translation + forward * DROP_DISTANCE).with_y(PLATFORM_TOP_Y);
-        commands.entity(item).drop_at(pos);
+        commands.entity(item).insert(on_ground_at(pos));
     }
 }
 
 type HudTexts<'w, 's> =
     Query<'w, 's, (&'static mut Text, &'static HudLine), (Without<Item>, Without<ViewOf>)>;
 
+#[expect(clippy::too_many_arguments)]
 fn update_hud(
     models: Query<EntityRef, With<Item>>,
     views: Query<EntityRef, With<ViewOf>>,
     player: Query<(Option<&Equips>, Option<&Stores>), With<Player>>,
     target: Res<LookTarget>,
     contributors: Res<InspectContributors>,
+    markers: Res<ItemStateMarkers>,
     components: &Components,
     mut texts: HudTexts,
 ) {
@@ -292,9 +294,11 @@ fn update_hud(
     let mut model_lines: Vec<String> = models
         .iter()
         .map(|model| {
-            let state = ItemState::of(model);
+            let state = markers
+                .key_of(model)
+                .map_or("<stateless>", StateKey::as_str);
             format!(
-                "{} {} {:?} [{}]",
+                "{} {} {} [{}]",
                 label_of(model),
                 model.id(),
                 state,
@@ -327,7 +331,7 @@ fn update_hud(
     let target_line = match target.0.and_then(|model| models.get(model).ok()) {
         Some(model) => format!(
             "target: {}",
-            inspect_lines(model, &contributors).join(" · ")
+            inspect_lines(model, &contributors, &markers).join(" · ")
         ),
         None => "target: <none>".to_string(),
     };
@@ -339,7 +343,7 @@ fn update_hud(
             let mut held: Vec<String> = equipped
                 .chain(stored)
                 .map(|item| match models.get(item) {
-                    Ok(model) => inspect_lines(model, &contributors).join(" · "),
+                    Ok(model) => inspect_lines(model, &contributors, &markers).join(" · "),
                     Err(_) => format!("{item}"),
                 })
                 .collect();
