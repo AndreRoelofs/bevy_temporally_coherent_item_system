@@ -45,12 +45,42 @@ Now that we have the basics out the way, let's see what else this architecture h
 Every item exists in one of the following 3 states
 
 ```rust
-pub enum ItemStateKind {
-    OnGround,
-    Equipped,
-    Stored,
-}
+// Marks items lying on the ground
+#[derive(Component)]
+pub struct OnGround;
+
+// Marks items equipped by a player in hand
+#[derive(Component)]
+pub struct EquippedBy(pub Entity);
+
+// Marks items stored in a container or player's inventory
+#[derive(Component)]
+pub struct StoredIn(pub Entity);
 ```
+
+An item can only have one of these states. The state decides how the item is displayed to the player. Let's say you want to equip an item to the player. You can do this by simply adding `EquippedBy` with a link to the player's entity, which then gets processed by the following observer
+
+```rust
+fn force_item_state_invariants<S: ItemStateMarker>(
+    insert: On<Insert, S>,
+    markers: Res<ItemStateMarkers>,
+    models: Query<EntityRef>,
+    mut commands: Commands,
+);
+```
+
+`force_item_state_invariants` removes every other item state that existed on the item before you decided to insert the new `EquippedBy` component. This includes any previous instances of `OnGround`, `EquippedBy` or `StoredIn` as well as any third party item states that can be added by mods. The reason why this works is that every `Component` that you want to explicitly define as an item state invariant can just be registered via
+
+```rust
+#[derive(Resource)]
+struct ItemStateMarkers(Vec<...>);
+```
+
+
+
+## Old Old Explanation
+
+
 
 Now we have a problem already. An item can receive `Rusty` only if it's `OnGround`. But it's performance can only be degraded if it's `Equipped`. We need to have some kind of way to preserve the components between the items states. For the purposes of this demo a gun is displayed as a 3D rectangle when on the ground, as a 2D image when in player's inventory and a 3D sphere when in hand, mimicking potentially different meshes that an item might have in all 3 different states.
 

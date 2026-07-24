@@ -79,10 +79,10 @@ pub fn register_item_state<S: ItemStateMarker>(app: &mut App) {
         return;
     }
     markers.0.push((id, S::KEY));
-    app.add_observer(exclude_others::<S>);
+    app.add_observer(force_item_state_invariants::<S>);
 }
 
-fn exclude_others<S: ItemStateMarker>(
+fn force_item_state_invariants<S: ItemStateMarker>(
     insert: On<Insert, S>,
     markers: Res<ItemStateMarkers>,
     models: Query<EntityRef>,
