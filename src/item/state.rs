@@ -87,11 +87,12 @@ impl Stores {
     }
 }
 
-/// Sanctioned state transitions. Each inserts only the new marker; the
-/// coherence observers clear the old one immediately afterwards, so the
-/// item never has zero markers and the moment with two never outlives the
-/// insert. Removing the old marker first is not an option: the repair net
-/// would see the between-markers gap and re-ground the item mid-transition.
+/// Sanctioned state transitions — the only supported door for moving an
+/// item between states. Each swaps the old marker for the new one in a
+/// single command, and `equip_to` demotes whatever the holder already had
+/// equipped into storage. Touching the markers directly, whether inserting
+/// or removing, is a contract violation: it leaves the item with zero or
+/// two markers, which the debug invariant check reports.
 pub trait ItemTransitions {
     fn equip_to(&mut self, holder: Entity) -> &mut Self;
 
@@ -107,7 +108,18 @@ impl ItemTransitions for EntityCommands<'_> {
                 warn!("equip_to: holder {holder} does not exist");
                 return;
             }
+            let model = item.id();
+            item.remove::<(StoredIn, OnGround)>();
             item.insert(EquippedBy(holder));
+            item.world_scope(|world| {
+                let demote: Vec<Entity> = world
+                    .get::<Equips>(holder)
+                    .map(|equips| equips.iter().filter(|&held| held != model).collect())
+                    .unwrap_or_default();
+                for held in demote {
+                    world.commands().entity(held).store_in(holder);
+                }
+            });
         });
         self
     }
@@ -118,90 +130,16 @@ impl ItemTransitions for EntityCommands<'_> {
                 warn!("store_in: container {container} does not exist");
                 return;
             }
+            item.remove::<(EquippedBy, OnGround)>();
             item.insert(StoredIn(container));
         });
         self
     }
 
     fn drop_at(&mut self, pos: Vec3) -> &mut Self {
-        self.insert((OnGround, Transform::from_translation(pos)))
+        self.remove::<(EquippedBy, StoredIn)>()
+            .insert((OnGround, Transform::from_translation(pos)))
     }
-}
-
-/// Removes `Stale` markers, but only if the `Kept` marker that queued this
-/// cleanup is still the item's state by the time the command runs; a later
-/// transition in the same batch must not have its fresh marker stripped.
-fn clear_conflicting<Kept: Component, Stale: Bundle>(world: &mut World, model: Entity) {
-    let Ok(mut model_mut) = world.get_entity_mut(model) else {
-        return;
-    };
-    if model_mut.contains::<Kept>() {
-        model_mut.remove::<Stale>();
-    }
-}
-
-/// Equipping wins over whatever the item was before: stale markers are
-/// cleared and any other item the holder had equipped is demoted into
-/// storage.
-pub(crate) fn coherence_on_equip(
-    insert: On<Insert, EquippedBy>,
-    equipped: Query<&EquippedBy>,
-    holders: Query<&Equips>,
-    mut commands: Commands,
-) {
-    let model = insert.event().entity;
-    commands.queue(move |world: &mut World| {
-        clear_conflicting::<EquippedBy, (StoredIn, OnGround)>(world, model);
-    });
-    let Ok(equipped_by) = equipped.get(model) else {
-        return;
-    };
-    let holder = equipped_by.holder();
-    let Ok(equips) = holders.get(holder) else {
-        return;
-    };
-    for held in equips.iter().filter(|&held| held != model) {
-        commands.entity(held).store_in(holder);
-    }
-}
-
-pub(crate) fn coherence_on_store(insert: On<Insert, StoredIn>, mut commands: Commands) {
-    let model = insert.event().entity;
-    commands.queue(move |world: &mut World| {
-        clear_conflicting::<StoredIn, (EquippedBy, OnGround)>(world, model);
-    });
-}
-
-pub(crate) fn coherence_on_ground(insert: On<Insert, OnGround>, mut commands: Commands) {
-    let model = insert.event().entity;
-    commands.queue(move |world: &mut World| {
-        clear_conflicting::<OnGround, (EquippedBy, StoredIn)>(world, model);
-    });
-}
-
-/// An item whose holder link vanished without a transition putting it
-/// somewhere else is re-grounded in place. The check runs deferred so a
-/// replacement marker inserted later in the same batch counts as a
-/// transition.
-pub(crate) fn repair_on_link_lost(
-    removed: On<Remove, (EquippedBy, StoredIn)>,
-    items: Query<(), With<Item>>,
-    mut commands: Commands,
-) {
-    let model = removed.event().entity;
-    if items.get(model).is_err() {
-        return;
-    }
-    commands.queue(move |world: &mut World| {
-        let Ok(model_ref) = world.get_entity(model) else {
-            return;
-        };
-        if ItemState::of(model_ref).is_some() {
-            return;
-        }
-        warn!("item {model} lost its container without a transition; re-grounding it in place");
-        world.entity_mut(model).insert(OnGround);
-    });
 }
 
 pub(crate) fn ground_items_of_dying_holder(

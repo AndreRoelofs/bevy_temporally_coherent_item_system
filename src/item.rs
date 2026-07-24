@@ -23,11 +23,7 @@ impl Plugin for ItemPlugin {
         app.init_resource::<LookTarget>()
             .init_resource::<InspectContributors>()
             .add_plugins((ItemComponentsPlugin, InventoryPlugin, ItemViewsPlugin))
-            .add_observer(state::coherence_on_equip)
-            .add_observer(state::coherence_on_store)
-            .add_observer(state::coherence_on_ground)
             .add_observer(state::ground_items_of_dying_holder)
-            .add_observer(state::repair_on_link_lost)
             .add_systems(Update, inspect::look_at_target);
         #[cfg(debug_assertions)]
         app.add_systems(

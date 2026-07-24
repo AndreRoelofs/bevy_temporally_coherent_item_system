@@ -49,9 +49,8 @@ impl View {
     }
 }
 
-/// One observer per marker: a transition may briefly leave both the old and
-/// the new marker on the item, so the fresh state comes from which insert
-/// fired, never from inspecting the markers.
+/// One observer per marker, each passing the state that fired straight to
+/// the refresh instead of re-deriving it off the entity.
 fn view_on_ground(insert: On<Insert, OnGround>, params: ViewRefreshParams, mut commands: Commands) {
     refresh_view(
         insert.event().entity,

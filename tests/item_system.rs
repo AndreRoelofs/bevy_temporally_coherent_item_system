@@ -4,8 +4,9 @@
 //! once.
 //!
 //! Every transition below goes through the `ItemTransitions` trait — the
-//! same door the game uses. Raw marker inserts are possible but converge
-//! through the coherence observers, which one test exercises deliberately.
+//! same door the game uses, and the only sanctioned one: touching the
+//! state markers directly is a contract violation the debug invariant
+//! check reports.
 
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
@@ -14,8 +15,8 @@ use bevy_temporally_coherent_item_system::{
     Ammo, CELL_PX, Cooldown, CooldownModifiers, CursorLocked, EquippedBy, Equips, FireOutcome,
     Firearm, GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryUi, Item,
     ItemFootprint, ItemKey, ItemPacking, ItemPlugin, ItemState, ItemTransitions, LastShotAt,
-    OnGround, PackedAt, Player, Rusty, StatModifierCommands, StatOp, StoredIn, Stores, View,
-    ViewOf, inspect_lines, try_fire,
+    PackedAt, Player, Rusty, StatModifierCommands, StatOp, StoredIn, Stores, View, ViewOf,
+    inspect_lines, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -792,7 +793,7 @@ fn a_full_bag_refuses_the_item_and_regrounds_it() {
     assert_eq!(
         state(&app, second),
         Some(ItemState::OnGround),
-        "no room — the repair net re-grounds the item instead of leaving it spotless"
+        "no room — the packer re-grounds the item instead of leaving it stateless"
     );
     assert_eq!(
         app.world().get::<Transform>(second).map(|t| t.translation),
@@ -966,43 +967,4 @@ fn equip_swap_repacks_the_demoted_weapon() {
     );
     assert_eq!(packed_origin(&app, rifle), Some(UVec2::ZERO));
     assert_eq!(state(&app, pistol), Some(ItemState::Equipped));
-}
-
-#[test]
-fn raw_link_removal_is_repaired() {
-    let mut app = test_app();
-    let player = app.world_mut().spawn(Transform::default()).id();
-    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
-    with_commands(&mut app, |commands| {
-        commands.entity(model).equip_to(player);
-    });
-
-    // Misuse: yank the link without a transition. The repair net re-grounds
-    // the item where it last lay instead of leaving a contradiction.
-    with_commands(&mut app, |commands| {
-        commands.entity(model).remove::<EquippedBy>();
-    });
-
-    assert_eq!(state(&app, model), Some(ItemState::OnGround));
-    let view = view_entity(&app, model).expect("repaired item has a ground view");
-    assert_eq!(
-        app.world().get::<ChildOf>(view).map(ChildOf::parent),
-        Some(model)
-    );
-}
-
-#[test]
-fn raw_marker_insert_converges() {
-    let mut app = test_app();
-    let player = app.world_mut().spawn(Transform::default()).id();
-    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
-
-    // Misuse: a raw marker insert instead of a transition. The coherence
-    // observers clear the stale marker so the axes converge anyway.
-    app.world_mut().entity_mut(model).insert(StoredIn(player));
-    app.update();
-
-    assert_eq!(state(&app, model), Some(ItemState::Stored));
-    assert!(app.world().get::<OnGround>(model).is_none());
-    assert_eq!(app.world().get::<Stores>(player).map(Stores::len), Some(1));
 }
