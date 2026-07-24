@@ -14,9 +14,9 @@ use bevy::transform::TransformPlugin;
 use bevy_temporally_coherent_item_system::{
     Ammo, CELL_PX, Cooldown, CooldownModifiers, CursorLocked, EquippedBy, Equips, FireOutcome,
     Firearm, GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryUi, Item,
-    ItemFootprint, ItemKey, ItemPacking, ItemPlugin, ItemStateMarker, ItemStateMarkers, LastShotAt,
-    OnGround, PackedAt, Player, Rusty, StatModifierCommands, StatOp, StateKey, StoredIn, Stores,
-    View, ViewOf, inspect_lines, on_ground_at, register_item_state, try_fire,
+    ItemFootprint, ItemKey, ItemLabel, ItemPacking, ItemPlugin, ItemStateMarker, ItemStateMarkers,
+    LastShotAt, OnGround, PackedAt, Player, Rusty, StatModifierCommands, StatOp, StateKey,
+    StoredIn, Stores, View, ViewOf, inspect_lines, on_ground_at, register_item_state, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -55,7 +55,7 @@ fn spawn_gun(app: &mut App, label: &str, pos: Vec3) -> Entity {
             .spawn((
                 Item {
                     key: ItemKey("core::item::gun".to_string()),
-                    label: label.to_string(),
+                    label: ItemLabel(label.to_string()),
                 },
                 Firearm {
                     cooldown: Cooldown(0.5),
@@ -175,7 +175,7 @@ fn unknown_key_leaves_model_intact() {
             .spawn((
                 Item {
                     key: ItemKey("core::item::typo".to_string()),
-                    label: "Typo".to_string(),
+                    label: ItemLabel("Typo".to_string()),
                 },
                 Visibility::default(),
             ))

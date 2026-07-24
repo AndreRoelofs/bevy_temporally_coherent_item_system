@@ -46,11 +46,14 @@ impl Plugin for ItemPlugin {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ItemKey(pub String);
 
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ItemLabel(pub String);
+
 #[derive(Component, Clone)]
 #[require(ItemFootprint)]
 pub struct Item {
     pub key: ItemKey,
-    pub label: String,
+    pub label: ItemLabel,
 }
 
 fn axis_violation(marker_count: usize) -> Option<&'static str> {

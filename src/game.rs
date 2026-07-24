@@ -5,10 +5,10 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use crate::{
     Ammo, Cooldown, CursorLocked, CursorSystems, EYE_HEIGHT, EquippedBy, Equips, Firearm,
     GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryOpen, InventoryUi,
-    InventoryUiOf, Item, ItemFootprint, ItemKey, ItemPlugin, ItemStateMarkers, LookTarget,
-    OnGround, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, PackedAt, Player, StateKey,
-    StoredIn, Stores, View, ViewOf, find_free_slot, inspect_lines, inventory_closed, look_around,
-    on_ground_at, set_cursor_lock, toggle_cursor, update_player,
+    InventoryUiOf, Item, ItemFootprint, ItemKey, ItemLabel, ItemPlugin, ItemStateMarkers,
+    LookTarget, OnGround, PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, PackedAt, Player,
+    StateKey, StoredIn, Stores, View, ViewOf, find_free_slot, inspect_lines, inventory_closed,
+    look_around, on_ground_at, set_cursor_lock, toggle_cursor, update_player,
 };
 
 pub struct GamePlugin;
@@ -136,7 +136,7 @@ fn spawn_guns(mut commands: Commands) {
             .spawn((
                 Item {
                     key: ItemKey("core::item::gun".to_string()),
-                    label: format!("Gun {}", n + 1),
+                    label: ItemLabel(format!("Gun {}", n + 1)),
                 },
                 ItemFootprint(footprint),
                 Firearm {
@@ -288,7 +288,9 @@ fn update_hud(
             .join(", ")
     };
     fn label_of<'a>(model: EntityRef<'a>) -> &'a str {
-        model.get::<Item>().map_or("?", |item| item.label.as_str())
+        model
+            .get::<Item>()
+            .map_or("?", |item| item.label.0.as_str())
     }
 
     let mut model_lines: Vec<String> = models

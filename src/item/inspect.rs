@@ -27,7 +27,9 @@ pub fn inspect_lines(
 ) -> Vec<String> {
     let mut lines = Vec::new();
 
-    let label = model.get::<Item>().map_or("?", |item| item.label.as_str());
+    let label = model
+        .get::<Item>()
+        .map_or("?", |item| item.label.0.as_str());
     let state = markers
         .key_of(model)
         .map_or("<stateless>", StateKey::as_str);
