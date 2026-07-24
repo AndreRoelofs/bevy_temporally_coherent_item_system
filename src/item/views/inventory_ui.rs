@@ -4,8 +4,8 @@ use bevy::prelude::*;
 
 use super::{View, ViewOf};
 use crate::{
-    ContainedBy, Contains, InventoryGrid, Item, ItemFootprint, ItemPacking, ItemState, PackedAt,
-    commit_drag, occupied_cells,
+    InventoryGrid, Item, ItemFootprint, ItemPacking, PackedAt, StoredIn, Stores, commit_drag,
+    occupied_cells,
 };
 
 pub const CELL_PX: f32 = 48.0;
@@ -199,9 +199,9 @@ fn icon_drag_end(
     drag: On<Pointer<DragEnd>>,
     open: Res<InventoryOpen>,
     mut icons: Query<(&ViewOf, &mut UiTransform, &mut ZIndex), With<ItemIcon>>,
-    models: Query<(&ContainedBy, &PackedAt, &ItemFootprint), With<Item>>,
-    containers: Query<(&InventoryGrid, &Contains)>,
-    stored: Query<(&ItemState, &PackedAt, &ItemFootprint), With<Item>>,
+    models: Query<(&StoredIn, &PackedAt, &ItemFootprint), With<Item>>,
+    containers: Query<(&InventoryGrid, &Stores)>,
+    stored: Query<(&PackedAt, &ItemFootprint), With<Item>>,
     mut commands: Commands,
 ) {
     let Ok((view_of, mut transform, mut z)) = icons.get_mut(drag.original_event_target()) else {
@@ -213,10 +213,10 @@ fn icon_drag_end(
         return;
     }
     let model = view_of.0;
-    let Ok((contained, packed, footprint)) = models.get(model) else {
+    let Ok((stored_in, packed, footprint)) = models.get(model) else {
         return;
     };
-    let Some((grid, occupied)) = occupied_cells(contained.container(), model, &containers, &stored)
+    let Some((grid, occupied)) = occupied_cells(stored_in.container(), model, &containers, &stored)
     else {
         return;
     };

@@ -1,19 +1,21 @@
 //! Headless proof of the architecture's guarantees: model components persist
-//! across every transition, views are disposable, the two axes stay
-//! coherent, and holders can carry equipped and stowed items at once.
+//! across every transition, views are disposable, the state markers stay
+//! mutually exclusive, and holders can carry equipped and stowed items at
+//! once.
 //!
-//! Note what these tests *cannot* do: construct an `ItemState` or a
-//! `ContainedBy`. Both are sealed, so every transition below goes through
-//! the `ItemTransitions` trait — the same door the game uses.
+//! Every transition below goes through the `ItemTransitions` trait — the
+//! same door the game uses. Raw marker inserts are possible but converge
+//! through the coherence observers, which one test exercises deliberately.
 
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformPlugin;
 use bevy_temporally_coherent_item_system::{
-    Ammo, CELL_PX, Contains, Cooldown, CooldownModifiers, CursorLocked, FireOutcome, Firearm,
-    GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryUi, Item, ItemFootprint,
-    ItemKey, ItemPacking, ItemPlugin, ItemState, ItemTransitions, LastShotAt, PackedAt, Player,
-    Rusty, StatModifierCommands, StatOp, View, ViewOf, inspect_lines, try_fire,
+    Ammo, CELL_PX, Cooldown, CooldownModifiers, CursorLocked, EquippedBy, Equips, FireOutcome,
+    Firearm, GroundedSecs, HandSocket, InspectContributors, InventoryGrid, InventoryUi, Item,
+    ItemFootprint, ItemKey, ItemPacking, ItemPlugin, ItemState, ItemTransitions, LastShotAt,
+    OnGround, PackedAt, Player, Rusty, StatModifierCommands, StatOp, StoredIn, Stores, View,
+    ViewOf, inspect_lines, try_fire,
 };
 
 /// Counts view spawns, so tests can assert refresh exactness.
@@ -73,7 +75,7 @@ fn view_entity(app: &App, model: Entity) -> Option<Entity> {
 }
 
 fn state(app: &App, model: Entity) -> Option<ItemState> {
-    app.world().get::<ItemState>(model).copied()
+    ItemState::of(app.world().entity(model))
 }
 
 fn view_spawns(app: &App) -> usize {
@@ -139,7 +141,8 @@ fn model_components_persist_and_views_swap() {
         commands.entity(model).drop_at(drop_pos);
     });
     assert_eq!(state(&app, model), Some(ItemState::OnGround));
-    assert!(app.world().get::<ContainedBy>(model).is_none());
+    assert!(app.world().get::<EquippedBy>(model).is_none());
+    assert!(app.world().get::<StoredIn>(model).is_none());
     assert_eq!(
         app.world().get::<Transform>(model).map(|t| t.translation),
         Some(drop_pos)
@@ -158,8 +161,6 @@ fn model_components_persist_and_views_swap() {
     assert!(app.world().get::<Rusty>(model).is_some());
     assert!(app.world().get::<Engraved>(model).is_some());
 }
-
-use bevy_temporally_coherent_item_system::ContainedBy;
 
 #[test]
 fn unknown_key_leaves_model_intact() {
@@ -240,15 +241,22 @@ fn carry_both_and_reverse_query() {
     assert_eq!(state(&app, sword), Some(ItemState::Equipped));
     assert_eq!(state(&app, gun), Some(ItemState::Stored));
 
-    // The O(1) reverse query: everything the player carries, one lookup.
-    let carried: Vec<Entity> = app
+    // The O(1) reverse queries: one lookup per carrying axis, and the axis
+    // split answers "what is wielded" without filtering.
+    let equipped: Vec<Entity> = app
         .world()
-        .get::<Contains>(player)
-        .expect("player carries items")
+        .get::<Equips>(player)
+        .expect("player wields the sword")
         .iter()
         .collect();
-    assert_eq!(carried.len(), 2);
-    assert!(carried.contains(&sword) && carried.contains(&gun));
+    assert_eq!(equipped, vec![sword]);
+    let stored: Vec<Entity> = app
+        .world()
+        .get::<Stores>(player)
+        .expect("player stows the gun")
+        .iter()
+        .collect();
+    assert_eq!(stored, vec![gun]);
 }
 
 #[test]
@@ -271,10 +279,8 @@ fn single_equipped_policy_demotes_previous_weapon() {
         "equipping a second weapon stows the first"
     );
     assert_eq!(state(&app, second), Some(ItemState::Equipped));
-    assert_eq!(
-        app.world().get::<Contains>(player).map(Contains::len),
-        Some(2)
-    );
+    assert_eq!(app.world().get::<Equips>(player).map(Equips::len), Some(1));
+    assert_eq!(app.world().get::<Stores>(player).map(Stores::len), Some(1));
 }
 
 #[test]
@@ -303,7 +309,8 @@ fn holder_death_drops_entire_inventory() {
             Some(ItemState::OnGround),
             "everything the holder carried drops, equipped and stowed alike"
         );
-        assert!(app.world().get::<ContainedBy>(model).is_none());
+        assert!(app.world().get::<EquippedBy>(model).is_none());
+        assert!(app.world().get::<StoredIn>(model).is_none());
         assert_eq!(
             app.world().get::<Transform>(model).map(|t| t.translation),
             Some(death_pos),
@@ -336,13 +343,10 @@ fn cross_container_move_updates_both_sides() {
 
     assert_eq!(state(&app, model), Some(ItemState::Equipped));
     assert!(
-        app.world().get::<Contains>(chest).is_none(),
+        app.world().get::<Stores>(chest).is_none(),
         "the chest's side of the relationship empties automatically"
     );
-    assert_eq!(
-        app.world().get::<Contains>(player).map(Contains::len),
-        Some(1)
-    );
+    assert_eq!(app.world().get::<Equips>(player).map(Equips::len), Some(1));
     assert_eq!(
         view_spawns(&app),
         spawns_before + 1,
@@ -363,7 +367,7 @@ fn model_despawn_while_contained_does_not_panic() {
     app.world_mut().entity_mut(model).despawn();
     app.update();
     assert!(app.world().get_entity(view).is_err());
-    assert_eq!(app.world().get::<Contains>(player).map(Contains::len), None);
+    assert_eq!(app.world().get::<Equips>(player).map(Equips::len), None);
 }
 
 #[test]
@@ -976,7 +980,7 @@ fn raw_link_removal_is_repaired() {
     // Misuse: yank the link without a transition. The repair net re-grounds
     // the item where it last lay instead of leaving a contradiction.
     with_commands(&mut app, |commands| {
-        commands.entity(model).remove::<ContainedBy>();
+        commands.entity(model).remove::<EquippedBy>();
     });
 
     assert_eq!(state(&app, model), Some(ItemState::OnGround));
@@ -985,4 +989,20 @@ fn raw_link_removal_is_repaired() {
         app.world().get::<ChildOf>(view).map(ChildOf::parent),
         Some(model)
     );
+}
+
+#[test]
+fn raw_marker_insert_converges() {
+    let mut app = test_app();
+    let player = app.world_mut().spawn(Transform::default()).id();
+    let model = spawn_gun(&mut app, "Gun", Vec3::ZERO);
+
+    // Misuse: a raw marker insert instead of a transition. The coherence
+    // observers clear the stale marker so the axes converge anyway.
+    app.world_mut().entity_mut(model).insert(StoredIn(player));
+    app.update();
+
+    assert_eq!(state(&app, model), Some(ItemState::Stored));
+    assert!(app.world().get::<OnGround>(model).is_none());
+    assert_eq!(app.world().get::<Stores>(player).map(Stores::len), Some(1));
 }

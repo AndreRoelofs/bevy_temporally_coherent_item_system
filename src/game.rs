@@ -3,10 +3,10 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use crate::{
-    Ammo, Contains, Cooldown, CursorLocked, CursorSystems, EYE_HEIGHT, Firearm, GroundedSecs,
+    Ammo, Cooldown, CursorLocked, CursorSystems, EYE_HEIGHT, Equips, Firearm, GroundedSecs,
     HandSocket, InspectContributors, InventoryGrid, InventoryOpen, InventoryUi, InventoryUiOf,
-    Item, ItemFootprint, ItemKey, ItemPlugin, ItemState, ItemTransitions, LookTarget,
-    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, PackedAt, Player, View, ViewOf,
+    Item, ItemFootprint, ItemKey, ItemPlugin, ItemState, ItemTransitions, LookTarget, OnGround,
+    PLATFORM_HALF, PLATFORM_THICKNESS, PLATFORM_TOP_Y, PackedAt, Player, Stores, View, ViewOf,
     find_free_slot, inspect_lines, inventory_closed, look_around, set_cursor_lock, toggle_cursor,
     update_player,
 };
@@ -153,47 +153,29 @@ fn spawn_guns(mut commands: Commands) {
 
 #[expect(clippy::type_complexity)]
 fn pickup_items(
-    player: Query<
-        (
-            Entity,
-            &Transform,
-            Option<&InventoryGrid>,
-            Option<&Contains>,
-        ),
-        With<Player>,
-    >,
+    player: Query<(Entity, &Transform, Option<&InventoryGrid>, Option<&Stores>), With<Player>>,
     items: Query<
-        (
-            Entity,
-            &ItemState,
-            &Transform,
-            &ItemFootprint,
-            Option<&PackedAt>,
-        ),
-        With<Item>,
+        (Entity, &Transform, &ItemFootprint, Option<&PackedAt>),
+        (With<Item>, With<OnGround>),
     >,
-    layouts: Query<(&ItemState, &PackedAt, &ItemFootprint), With<Item>>,
+    layouts: Query<(&PackedAt, &ItemFootprint), With<Item>>,
     mut commands: Commands,
 ) {
-    let Ok((player_e, player_t, grid, contains)) = player.single() else {
+    let Ok((player_e, player_t, grid, stores)) = player.single() else {
         return;
     };
 
-    let mut occupied: Vec<(UVec2, UVec2)> = contains
-        .map(|contains| {
-            contains
+    let mut occupied: Vec<(UVec2, UVec2)> = stores
+        .map(|stores| {
+            stores
                 .iter()
                 .filter_map(|held| layouts.get(held).ok())
-                .filter(|(state, ..)| state == &&ItemState::Stored)
-                .map(|(_, packed, footprint)| (packed.origin(), footprint.0))
+                .map(|(packed, footprint)| (packed.origin(), footprint.0))
                 .collect()
         })
         .unwrap_or_default();
 
-    for (item_e, state, item_t, footprint, packed) in &items {
-        if state != &ItemState::OnGround {
-            continue;
-        }
+    for (item_e, item_t, footprint, packed) in &items {
         let dist = (player_t.translation - item_t.translation)
             .with_y(0.0)
             .length();
@@ -241,21 +223,17 @@ fn toggle_inventory(
 
 fn equip_from_bag(
     keys: Res<ButtonInput<KeyCode>>,
-    player: Query<(Entity, Option<&Contains>), With<Player>>,
-    states: Query<&ItemState, With<Item>>,
+    player: Query<(Entity, &Stores), With<Player>>,
+    items: Query<(), With<Item>>,
     mut commands: Commands,
 ) {
     if !keys.just_pressed(KeyCode::KeyQ) {
         return;
     }
-    let Ok((player_e, Some(contains))) = player.single() else {
+    let Ok((player_e, stores)) = player.single() else {
         return;
     };
-    let stored = contains.iter().find(|&held| {
-        states
-            .get(held)
-            .is_ok_and(|state| state == &ItemState::Stored)
-    });
+    let stored = stores.iter().find(|&held| items.get(held).is_ok());
     if let Some(item) = stored {
         commands.entity(item).equip_to(player_e);
     }
@@ -263,21 +241,17 @@ fn equip_from_bag(
 
 fn drop_equipped(
     keys: Res<ButtonInput<KeyCode>>,
-    player: Query<(&Transform, Option<&Contains>), With<Player>>,
-    states: Query<&ItemState, With<Item>>,
+    player: Query<(&Transform, &Equips), With<Player>>,
+    items: Query<(), With<Item>>,
     mut commands: Commands,
 ) {
     if !keys.just_pressed(KeyCode::KeyG) {
         return;
     }
-    let Ok((player_t, Some(contains))) = player.single() else {
+    let Ok((player_t, equips)) = player.single() else {
         return;
     };
-    let equipped = contains.iter().find(|&held| {
-        states
-            .get(held)
-            .is_ok_and(|state| state == &ItemState::Equipped)
-    });
+    let equipped = equips.iter().find(|&held| items.get(held).is_ok());
     if let Some(item) = equipped {
         let forward = player_t.forward().with_y(0.0).normalize_or_zero();
         let pos = (player_t.translation + forward * DROP_DISTANCE).with_y(PLATFORM_TOP_Y);
@@ -291,7 +265,7 @@ type HudTexts<'w, 's> =
 fn update_hud(
     models: Query<EntityRef, With<Item>>,
     views: Query<EntityRef, With<ViewOf>>,
-    player: Query<Option<&Contains>, With<Player>>,
+    player: Query<(Option<&Equips>, Option<&Stores>), With<Player>>,
     target: Res<LookTarget>,
     contributors: Res<InspectContributors>,
     components: &Components,
@@ -318,7 +292,7 @@ fn update_hud(
     let mut model_lines: Vec<String> = models
         .iter()
         .map(|model| {
-            let state = model.get::<ItemState>().copied();
+            let state = ItemState::of(model);
             format!(
                 "{} {} {:?} [{}]",
                 label_of(model),
@@ -359,18 +333,24 @@ fn update_hud(
     };
 
     let carrying = match player.single() {
-        Ok(Some(contains)) => {
-            let mut held: Vec<String> = contains
-                .iter()
+        Ok((equips, stores)) => {
+            let equipped = equips.into_iter().flat_map(|equips| equips.iter());
+            let stored = stores.into_iter().flat_map(|stores| stores.iter());
+            let mut held: Vec<String> = equipped
+                .chain(stored)
                 .map(|item| match models.get(item) {
                     Ok(model) => inspect_lines(model, &contributors).join(" · "),
                     Err(_) => format!("{item}"),
                 })
                 .collect();
-            held.sort();
-            format!("carrying:\n  {}", held.join("\n  "))
+            if held.is_empty() {
+                "carrying: <nothing>".to_string()
+            } else {
+                held.sort();
+                format!("carrying:\n  {}", held.join("\n  "))
+            }
         }
-        _ => "carrying: <nothing>".to_string(),
+        Err(_) => "carrying: <nothing>".to_string(),
     };
 
     for (mut text, line) in &mut texts {

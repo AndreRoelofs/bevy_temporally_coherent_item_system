@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::scene::ScenePatch;
 
-use super::{ContainedBy, Item, ItemRegistry, ItemState};
+use super::{EquippedBy, Item, ItemRegistry, ItemState, OnGround, StoredIn};
 
 mod gun;
 mod inventory_ui;
@@ -20,7 +20,9 @@ pub struct ItemViewsPlugin;
 impl Plugin for ItemViewsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ItemRegistry>()
-            .add_observer(view_on_state_change)
+            .add_observer(view_on_ground)
+            .add_observer(view_on_equip)
+            .add_observer(view_on_store)
             .add_plugins((
                 ViewTintPlugin,
                 InventoryUiPlugin,
@@ -47,54 +49,67 @@ impl View {
     }
 }
 
-fn view_on_state_change(
-    insert: On<Insert, ItemState>,
-    models: Query<EntityRef, With<Item>>,
-    registry: Res<ItemRegistry>,
-    children: Query<&Children>,
-    sockets: Query<(), With<HandSocket>>,
-    panels: Query<&InventoryUi>,
-    mut commands: Commands,
-) {
+/// One observer per marker: a transition may briefly leave both the old and
+/// the new marker on the item, so the fresh state comes from which insert
+/// fired, never from inspecting the markers.
+fn view_on_ground(insert: On<Insert, OnGround>, params: ViewRefreshParams, mut commands: Commands) {
     refresh_view(
         insert.event().entity,
-        &models,
-        &registry,
-        &children,
-        &sockets,
-        &panels,
+        ItemState::OnGround,
+        &params,
         commands.reborrow(),
     );
 }
 
-pub(crate) fn refresh_view(
-    model: Entity,
-    models: &Query<EntityRef, With<Item>>,
-    registry: &ItemRegistry,
-    children: &Query<&Children>,
-    sockets: &Query<(), With<HandSocket>>,
-    panels: &Query<&InventoryUi>,
+fn view_on_equip(
+    insert: On<Insert, EquippedBy>,
+    params: ViewRefreshParams,
     mut commands: Commands,
 ) {
-    let Ok(model_ref) = models.get(model) else {
+    refresh_view(
+        insert.event().entity,
+        ItemState::Equipped,
+        &params,
+        commands.reborrow(),
+    );
+}
+
+fn view_on_store(insert: On<Insert, StoredIn>, params: ViewRefreshParams, mut commands: Commands) {
+    refresh_view(
+        insert.event().entity,
+        ItemState::Stored,
+        &params,
+        commands.reborrow(),
+    );
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ViewRefreshParams<'w, 's> {
+    models: Query<'w, 's, EntityRef<'static>, With<Item>>,
+    registry: Res<'w, ItemRegistry>,
+    children: Query<'w, 's, &'static Children>,
+    sockets: Query<'w, 's, (), With<HandSocket>>,
+    panels: Query<'w, 's, &'static InventoryUi>,
+}
+
+pub(crate) fn refresh_view(
+    model: Entity,
+    state: ItemState,
+    params: &ViewRefreshParams,
+    mut commands: Commands,
+) {
+    let Ok(model_ref) = params.models.get(model) else {
         return;
     };
 
     commands.entity(model).despawn_related::<View>();
 
-    let Some(state) = model_ref.get::<ItemState>().copied() else {
-        return;
-    };
-    let Some(chrome) = registry.chrome(model_ref, state) else {
-        return;
-    };
-
     let parent = match state {
         ItemState::OnGround => model,
-        ItemState::Equipped => match model_ref.get::<ContainedBy>() {
-            Some(contained) => {
-                let holder = contained.container();
-                socket_of(holder, children, sockets).unwrap_or_else(|| {
+        ItemState::Equipped => match model_ref.get::<EquippedBy>() {
+            Some(equipped) => {
+                let holder = equipped.holder();
+                socket_of(holder, &params.children, &params.sockets).unwrap_or_else(|| {
                     warn!("holder {holder} has no HandSocket; parenting view to its root");
                     holder
                 })
@@ -105,12 +120,13 @@ pub(crate) fn refresh_view(
             }
         },
         ItemState::Stored => {
-            let Some(contained) = model_ref.get::<ContainedBy>() else {
+            let Some(stored) = model_ref.get::<StoredIn>() else {
                 warn!("stored item {model} has no container; skipping its view");
                 return;
             };
-            match panels
-                .get(contained.container())
+            match params
+                .panels
+                .get(stored.container())
                 .ok()
                 .and_then(InventoryUi::entity)
             {
@@ -118,6 +134,9 @@ pub(crate) fn refresh_view(
                 None => return,
             }
         }
+    };
+    let Some(chrome) = params.registry.chrome(model_ref, state) else {
+        return;
     };
 
     let chrome = chrome.clone();

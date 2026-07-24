@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::{Cooldown, Item, ItemState, StatModifierCommands, StatOp};
+use crate::{Cooldown, Item, OnGround, StatModifierCommands, StatOp};
 
 const RUST_AFTER_SECS: f32 = 5.0;
 const RUST_COOLDOWN_MULT: f32 = 2.0;
@@ -48,13 +48,10 @@ pub struct GroundedSecs(pub f32);
 #[expect(clippy::type_complexity)]
 fn rust_grounded_items(
     time: Res<Time>,
-    mut items: Query<(Entity, &ItemState, &mut GroundedSecs), (With<Item>, Without<Rusty>)>,
+    mut items: Query<(Entity, &mut GroundedSecs), (With<Item>, With<OnGround>, Without<Rusty>)>,
     mut commands: Commands,
 ) {
-    for (item_e, state, mut grounded) in &mut items {
-        if state != &ItemState::OnGround {
-            continue;
-        }
+    for (item_e, mut grounded) in &mut items {
         grounded.0 += time.delta_secs();
         if grounded.0 >= RUST_AFTER_SECS {
             commands.entity(item_e).insert(Rusty);

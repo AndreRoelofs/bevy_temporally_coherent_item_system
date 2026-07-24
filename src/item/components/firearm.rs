@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 
-use crate::{
-    Contains, Cooldown, CooldownModifiers, CursorLocked, CursorSystems, ItemState, Player,
-};
+use crate::{Cooldown, CooldownModifiers, CursorLocked, CursorSystems, Equips, Player};
 
 /// Shorthand that will need to live in a more general place in the future
 type EquippedGuns<'w, 's> = Query<
@@ -10,7 +8,6 @@ type EquippedGuns<'w, 's> = Query<
     's,
     (
         Entity,
-        &'static ItemState,
         &'static Firearm,
         Option<&'static CooldownModifiers>,
         &'static mut Ammo,
@@ -71,7 +68,7 @@ fn fire_equipped(
     mouse: Res<ButtonInput<MouseButton>>,
     locked: Option<Res<CursorLocked>>,
     time: Res<Time>,
-    player: Query<&Contains, With<Player>>,
+    player: Query<&Equips, With<Player>>,
     mut guns: EquippedGuns,
     mut shots: MessageWriter<ShotFired>,
     mut commands: Commands,
@@ -79,17 +76,14 @@ fn fire_equipped(
     if !locked.is_some_and(|locked| locked.0) || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    let Ok(contains) = player.single() else {
+    let Ok(equips) = player.single() else {
         return;
     };
 
-    for held in contains.iter() {
-        let Ok((gun, state, firearm, modifiers, mut ammo, last_shot)) = guns.get_mut(held) else {
+    for held in equips.iter() {
+        let Ok((gun, firearm, modifiers, mut ammo, last_shot)) = guns.get_mut(held) else {
             continue;
         };
-        if state != &ItemState::Equipped {
-            continue;
-        }
         let cooldown = firearm.cooldown.effective(modifiers);
         if try_fire(time.elapsed_secs(), cooldown, &ammo, last_shot) == FireOutcome::Fired {
             ammo.0 -= 1;

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::{ContainedBy, Contains, Item, ItemState, ItemTransitions};
+use crate::{Item, ItemTransitions, StoredIn, Stores};
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ItemFootprint(pub UVec2);
@@ -111,16 +111,15 @@ pub fn commit_drag(
 pub(crate) fn occupied_cells(
     container: Entity,
     except: Entity,
-    containers: &Query<(&InventoryGrid, &Contains)>,
-    stored: &Query<(&ItemState, &PackedAt, &ItemFootprint), With<Item>>,
+    containers: &Query<(&InventoryGrid, &Stores)>,
+    stored: &Query<(&PackedAt, &ItemFootprint), With<Item>>,
 ) -> Option<(UVec2, Vec<(UVec2, UVec2)>)> {
-    let (grid, contains) = containers.get(container).ok()?;
-    let occupied = contains
+    let (grid, stores) = containers.get(container).ok()?;
+    let occupied = stores
         .iter()
         .filter(|&held| held != except)
         .filter_map(|held| stored.get(held).ok())
-        .filter(|(state, ..)| state == &&ItemState::Stored)
-        .map(|(_, packed, footprint)| (packed.origin(), footprint.0))
+        .map(|(packed, footprint)| (packed.origin(), footprint.0))
         .collect();
     Some((grid.size(), occupied))
 }
@@ -131,25 +130,20 @@ fn occupied_cells_world(
     except: Entity,
 ) -> Vec<(UVec2, UVec2)> {
     world
-        .query_filtered::<(Entity, &ItemState, &ContainedBy, &PackedAt, &ItemFootprint), With<Item>>()
+        .query_filtered::<(Entity, &StoredIn, &PackedAt, &ItemFootprint), With<Item>>()
         .iter(world)
-        .filter(|&(held, state, contained, ..)| {
-            held != except && state == &ItemState::Stored && contained.container() == container
-        })
-        .map(|(_, _, _, packed, footprint)| (packed.origin(), footprint.0))
+        .filter(|&(held, stored_in, ..)| held != except && stored_in.container() == container)
+        .map(|(_, _, packed, footprint)| (packed.origin(), footprint.0))
         .collect()
 }
 
 fn pack_on_store(
-    insert: On<Insert, ItemState>,
-    states: Query<&ItemState, With<Item>>,
+    insert: On<Insert, StoredIn>,
+    items: Query<(), With<Item>>,
     mut commands: Commands,
 ) {
     let model = insert.event().entity;
-    if !states
-        .get(model)
-        .is_ok_and(|state| state == &ItemState::Stored)
-    {
+    if items.get(model).is_err() {
         return;
     }
     commands.queue(move |world: &mut World| pack_into_grid(world, model));
@@ -159,13 +153,7 @@ fn pack_into_grid(world: &mut World, model: Entity) {
     let Ok(model_ref) = world.get_entity(model) else {
         return;
     };
-    if !model_ref
-        .get::<ItemState>()
-        .is_some_and(|state| state == &ItemState::Stored)
-    {
-        return;
-    }
-    let Some(container) = model_ref.get::<ContainedBy>().map(ContainedBy::container) else {
+    let Some(container) = model_ref.get::<StoredIn>().map(StoredIn::container) else {
         return;
     };
     let footprint = model_ref
@@ -206,15 +194,8 @@ impl ItemPacking for EntityCommands<'_> {
     fn repack_at(&mut self, origin: UVec2) -> &mut Self {
         self.queue(move |mut item: EntityWorldMut| {
             let model = item.id();
-            if !item
-                .get::<ItemState>()
-                .is_some_and(|state| state == &ItemState::Stored)
-            {
+            let Some(container) = item.get::<StoredIn>().map(StoredIn::container) else {
                 warn!("repack_at: item {model} is not stored");
-                return;
-            }
-            let Some(container) = item.get::<ContainedBy>().map(ContainedBy::container) else {
-                warn!("repack_at: stored item {model} has no container");
                 return;
             };
             let footprint = item.get::<ItemFootprint>().copied().unwrap_or_default().0;
@@ -241,18 +222,15 @@ impl ItemPacking for EntityCommands<'_> {
 
 #[cfg(debug_assertions)]
 fn check_packing_invariants(
-    containers: Query<(Entity, &InventoryGrid, &Contains)>,
-    items: Query<(&ItemState, Option<&PackedAt>, &ItemFootprint), With<Item>>,
+    containers: Query<(Entity, &InventoryGrid, &Stores)>,
+    items: Query<(Option<&PackedAt>, &ItemFootprint), With<Item>>,
 ) {
-    for (container, grid, contains) in &containers {
+    for (container, grid, stores) in &containers {
         let mut seen: Vec<(Entity, UVec2, UVec2)> = Vec::new();
-        for held in contains.iter() {
-            let Ok((state, packed, footprint)) = items.get(held) else {
+        for held in stores.iter() {
+            let Ok((packed, footprint)) = items.get(held) else {
                 continue;
             };
-            if state != &ItemState::Stored {
-                continue;
-            }
             let Some(packed) = packed else {
                 error!("stored item {held} in gridded container {container} has no PackedAt");
                 continue;
